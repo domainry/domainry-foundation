@@ -64,6 +64,19 @@ func TestSQLMetricsNilBoundsOperationsAndOutcomes(t *testing.T) {
 	nilMetrics.observe(nil, "runtime", "select", "success", time.Millisecond)
 }
 
+func TestSQLMetricsAllowsBoundedServiceNamespace(t *testing.T) {
+	metrics := NewSQLMetricsWithNamespace("domainry_runtime")
+	metrics.ObserveQuery("runtime", "select", time.Millisecond, nil)
+	if output := metrics.OpenMetrics(t.Context()); !strings.Contains(output, "domainry_runtime_db_query_duration_seconds") {
+		t.Fatalf("service metric namespace missing:\n%s", output)
+	}
+	invalid := NewSQLMetricsWithNamespace("not valid")
+	invalid.ObserveQuery("runtime", "select", time.Millisecond, nil)
+	if output := invalid.OpenMetrics(t.Context()); !strings.Contains(output, "domainry_db_query_duration_seconds") {
+		t.Fatalf("invalid namespace did not fail closed:\n%s", output)
+	}
+}
+
 func TestSQLOperationAndMetricCloneEdges(t *testing.T) {
 	for query, want := range map[string]string{
 		"": "other", " SELECT 1": "select", "WITH rows AS (SELECT 1) SELECT * FROM rows": "select", "SHOW tables": "select", "EXPLAIN SELECT 1": "select",

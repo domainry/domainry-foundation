@@ -24,12 +24,29 @@ type sqlMetricSeries struct {
 
 type SQLMetrics struct {
 	mu           sync.RWMutex
+	namespace    string
 	queries      map[string]sqlMetricSeries
 	transactions map[string]sqlMetricSeries
 }
 
 func NewSQLMetrics() *SQLMetrics {
-	return &SQLMetrics{queries: map[string]sqlMetricSeries{}, transactions: map[string]sqlMetricSeries{}}
+	return NewSQLMetricsWithNamespace("domainry")
+}
+
+// NewSQLMetricsWithNamespace preserves the consuming service's published
+// metric identity while sharing the bounded SQL observation mechanism.
+func NewSQLMetricsWithNamespace(namespace string) *SQLMetrics {
+	namespace = strings.TrimSpace(namespace)
+	if namespace == "" {
+		namespace = "domainry"
+	}
+	for _, value := range namespace {
+		if (value < 'a' || value > 'z') && (value < 'A' || value > 'Z') && (value < '0' || value > '9') && value != '_' && value != ':' {
+			namespace = "domainry"
+			break
+		}
+	}
+	return &SQLMetrics{namespace: namespace, queries: map[string]sqlMetricSeries{}, transactions: map[string]sqlMetricSeries{}}
 }
 
 func (m *SQLMetrics) ObserveQuery(role, operation string, duration time.Duration, err error) {
@@ -85,8 +102,12 @@ func (m *SQLMetrics) OpenMetrics(_ context.Context) string {
 	transactions := cloneSQLSeries(m.transactions)
 	m.mu.RUnlock()
 	var output strings.Builder
-	writeSQLHistogram(&output, "domainry_db_query_duration_seconds", "Database operation duration without SQL text or relation labels.", queries)
-	writeSQLHistogram(&output, "domainry_db_transaction_duration_seconds", "Database transaction duration by bounded terminal outcome.", transactions)
+	namespace := m.namespace
+	if namespace == "" {
+		namespace = "domainry"
+	}
+	writeSQLHistogram(&output, namespace+"_db_query_duration_seconds", "Database operation duration without SQL text or relation labels.", queries)
+	writeSQLHistogram(&output, namespace+"_db_transaction_duration_seconds", "Database transaction duration by bounded terminal outcome.", transactions)
 	return output.String()
 }
 
