@@ -63,4 +63,39 @@ func TestValidateSurfaceRejectsDuplicateRoutes(t *testing.T) {
 	}
 }
 
+func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
+	route := Route{
+		Pattern: "POST /reports/{reportKey}/snapshots/refresh", Exposures: []Exposure{ExposurePublic},
+		Authentication: AuthenticationAuthenticated, PrincipalOnly: true,
+		Governance: &Governance{EffectClass: EffectWrite, HighRiskPolicy: HighRiskNone, IdempotencyDecision: "caller_key_required", AuditClass: "mutation_audit_required"},
+	}
+	surface := governedTestSurface{testSurface: testSurface{contract: ContractVersion, owner: "report", name: "reports", handler: http.NotFoundHandler(), routes: []Route{route}}, operations: map[string]map[string]any{
+		route.Pattern: {"operationId": "refreshReportSnapshot"},
+	}}
+	if err := ValidateSurface(surface); err != nil {
+		t.Fatalf("validate governed surface: %v", err)
+	}
+
+	invalid := route
+	invalid.Governance = &Governance{EffectClass: EffectWrite, HighRiskPolicy: HighRiskNone}
+	if err := ValidateRoute(invalid); err == nil || !strings.Contains(err.Error(), "idempotency decision") {
+		t.Fatalf("unexpected governance error: %v", err)
+	}
+
+	surface.operations = map[string]map[string]any{"GET /unknown": {"operationId": "unknown"}}
+	if err := ValidateSurface(surface); err == nil || !strings.Contains(err.Error(), "undeclared route") {
+		t.Fatalf("unexpected OpenAPI ownership error: %v", err)
+	}
+}
+
+type governedTestSurface struct {
+	testSurface
+	operations map[string]map[string]any
+}
+
+func (surface governedTestSurface) OpenAPIOperations() map[string]map[string]any {
+	return surface.operations
+}
+
 var _ Surface = testSurface{}
+var _ OpenAPIProvider = governedTestSurface{}

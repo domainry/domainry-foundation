@@ -29,6 +29,39 @@ const (
 	AuthenticationService       Authentication = "service"
 )
 
+// EffectClass classifies whether a route observes state or can change it. The
+// host uses this declaration to apply transport governance without importing a
+// capability's product-domain implementation.
+type EffectClass string
+
+const (
+	EffectRead  EffectClass = "read"
+	EffectWrite EffectClass = "write"
+)
+
+// HighRiskPolicy declares the common evidence a host must verify before a
+// request reaches the module handler. Domain-specific authorization remains
+// owned by the module application service.
+type HighRiskPolicy string
+
+const (
+	HighRiskNone                 HighRiskPolicy = "none"
+	HighRiskReasonRequired       HighRiskPolicy = "reason_required"
+	HighRiskConfirmationRequired HighRiskPolicy = "confirmation_required"
+	HighRiskBreakGlassRequired   HighRiskPolicy = "break_glass_required"
+)
+
+// Governance is optional for compatibility with existing v1 module surfaces.
+// New product routes should declare it so the host can enforce the same
+// transport policy regardless of whether the capability runs in Runtime or in
+// an embedded module.
+type Governance struct {
+	EffectClass         EffectClass
+	HighRiskPolicy      HighRiskPolicy
+	IdempotencyDecision string
+	AuditClass          string
+}
+
 // Route is a host-enforced declaration. Permission is required for an
 // authenticated or service route unless the route is explicitly classified as
 // principal_only. Anonymous routes are intended for authentication bootstrap,
@@ -40,6 +73,7 @@ type Route struct {
 	Permission     string
 	AnyPermissions []string
 	PrincipalOnly  bool
+	Governance     *Governance
 }
 
 type AuditEvent struct {
@@ -63,6 +97,14 @@ type Surface interface {
 
 type Provider interface {
 	HTTPSurfaces() []Surface
+}
+
+// OpenAPIProvider is implemented by a Surface that owns full OpenAPI
+// operations for its declared routes. Keys are exact Route.Pattern values and
+// values are OpenAPI operation objects. The host validates route ownership and
+// merges copies into its process document.
+type OpenAPIProvider interface {
+	OpenAPIOperations() map[string]map[string]any
 }
 
 // ValidateSurface rejects incomplete and ambient-authority declarations before
@@ -90,6 +132,16 @@ func ValidateSurface(surface Surface) error {
 			return fmt.Errorf("module HTTP surface %q/%q declares route %q more than once", owner, name, route.Pattern)
 		}
 		seen[route.Pattern] = true
+	}
+	if provider, ok := surface.(OpenAPIProvider); ok {
+		for pattern, operation := range provider.OpenAPIOperations() {
+			if !seen[strings.TrimSpace(pattern)] {
+				return fmt.Errorf("module HTTP surface %q/%q publishes OpenAPI for undeclared route %q", owner, name, pattern)
+			}
+			if len(operation) == 0 || strings.TrimSpace(stringValue(operation["operationId"])) == "" {
+				return fmt.Errorf("module HTTP surface %q/%q route %q has incomplete OpenAPI", owner, name, pattern)
+			}
+		}
 	}
 	return nil
 }
@@ -128,5 +180,35 @@ func ValidateRoute(route Route) error {
 	default:
 		return fmt.Errorf("route %q has unsupported authentication %q", route.Pattern, route.Authentication)
 	}
+	if route.Governance != nil {
+		if err := validateGovernance(route.Pattern, *route.Governance); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func validateGovernance(pattern string, governance Governance) error {
+	switch governance.EffectClass {
+	case EffectRead, EffectWrite:
+	default:
+		return fmt.Errorf("route %q has unsupported effect class %q", pattern, governance.EffectClass)
+	}
+	switch governance.HighRiskPolicy {
+	case HighRiskNone, HighRiskReasonRequired, HighRiskConfirmationRequired, HighRiskBreakGlassRequired:
+	default:
+		return fmt.Errorf("route %q has unsupported high-risk policy %q", pattern, governance.HighRiskPolicy)
+	}
+	if strings.TrimSpace(governance.IdempotencyDecision) == "" {
+		return fmt.Errorf("route %q requires an idempotency decision", pattern)
+	}
+	if strings.TrimSpace(governance.AuditClass) == "" {
+		return fmt.Errorf("route %q requires an audit class", pattern)
+	}
+	return nil
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
 }
