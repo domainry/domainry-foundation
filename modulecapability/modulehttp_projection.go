@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
@@ -33,26 +34,27 @@ func CategoryFromHTTPRoutes(input HTTPRouteCategory) (CategoryDocument, error) {
 		return CategoryDocument{}, fmt.Errorf("module HTTP capability owner is invalid")
 	}
 	routes := append([]modulehttp.Route(nil), input.Routes...)
-	sort.Slice(routes, func(i, j int) bool { return routes[i].Pattern < routes[j].Pattern })
+	sort.Slice(routes, func(i, j int) bool { return routes[i].Pattern() < routes[j].Pattern() })
 	paths := map[string]map[string]json.RawMessage{}
 	for _, route := range routes {
 		if err := modulehttp.ValidateRoute(route); err != nil {
 			return CategoryDocument{}, err
 		}
-		method, path, found := strings.Cut(strings.TrimSpace(route.Pattern), " ")
+		pattern := route.Pattern()
+		method, path, found := strings.Cut(pattern, " ")
 		method, path = strings.ToLower(strings.TrimSpace(method)), strings.TrimSpace(path)
 		if !found || method == "" || path == "" {
-			return CategoryDocument{}, fmt.Errorf("module HTTP capability route %q is invalid", route.Pattern)
+			return CategoryDocument{}, fmt.Errorf("module HTTP capability route %q is invalid", pattern)
 		}
-		operation := input.Operations[route.Pattern]
+		operation := input.Operations[pattern]
 		if len(operation) == 0 {
-			return CategoryDocument{}, fmt.Errorf("module HTTP capability route %q has no source-owned OpenAPI Operation", route.Pattern)
+			return CategoryDocument{}, fmt.Errorf("module HTTP capability route %q has no source-owned OpenAPI Operation", pattern)
 		}
 		value, err := cloneOperationMap(operation)
 		if err != nil {
-			return CategoryDocument{}, fmt.Errorf("module HTTP capability route %q: %w", route.Pattern, err)
+			return CategoryDocument{}, fmt.Errorf("module HTTP capability route %q: %w", pattern, err)
 		}
-		extension, overridden := input.ExtensionOverrides[route.Pattern]
+		extension, overridden := input.ExtensionOverrides[pattern]
 		if !overridden {
 			extension, err = operationExtensionFromHTTPRoute(owner, input.WorkspaceScope, route)
 			if err != nil {
@@ -81,38 +83,29 @@ func CategoryFromHTTPRoutes(input HTTPRouteCategory) (CategoryDocument, error) {
 }
 
 func operationExtensionFromHTTPRoute(owner, workspaceScope string, route modulehttp.Route) (OperationExtension, error) {
-	authorization := Authorization{}
-	switch route.Authentication {
-	case modulehttp.AuthenticationAnonymous:
-		authorization.Mode = AuthorizationAnonymous
-	case modulehttp.AuthenticationAuthenticated, modulehttp.AuthenticationService:
+	authorization := Authorization{
+		Strategy: route.Action.Authorization.Strategy, PolicyKey: route.Action.Authorization.PolicyKey,
+		Audiences: append([]string(nil), route.Action.Authorization.Audiences...),
+	}
+	if route.Action.Permission != nil {
+		authorization.Permission = route.Action.Permission.Key
+	}
+	if authorization.Strategy != actioncontract.AuthorizationAnonymousProtocol {
 		authorization.WorkspaceScope = strings.TrimSpace(workspaceScope)
 		if authorization.WorkspaceScope == "" {
-			if route.Authentication == modulehttp.AuthenticationService {
+			if authorization.Strategy == actioncontract.AuthorizationDelegatedCredential {
+				authorization.WorkspaceScope = "credential_workspace"
+			} else if authorization.Strategy == actioncontract.AuthorizationServiceIdentity {
 				authorization.WorkspaceScope = "application_workspace"
 			} else {
 				authorization.WorkspaceScope = "authenticated_workspace_principal"
 			}
 		}
-		switch {
-		case route.PrincipalOnly:
-			authorization.Mode = AuthorizationPrincipal
-		case strings.TrimSpace(route.Permission) != "":
-			authorization.Mode = AuthorizationFixed
-			authorization.AllOf = []string{strings.TrimSpace(route.Permission)}
-		case len(route.AnyPermissions) != 0:
-			authorization.Mode = AuthorizationFixed
-			authorization.AnyOf = append([]string(nil), route.AnyPermissions...)
-			sort.Strings(authorization.AnyOf)
-		}
-	}
-	if route.Governance == nil {
-		return OperationExtension{}, fmt.Errorf("module HTTP capability route %q requires source-owned governance", route.Pattern)
 	}
 	return OperationExtension{
 		Owner: owner, Authorization: authorization,
-		Effect:      EffectClass(route.Governance.EffectClass),
-		Idempotency: Idempotency{Mode: strings.TrimSpace(route.Governance.IdempotencyDecision)},
+		Effect:      EffectClass(route.Action.EffectClass),
+		Idempotency: Idempotency{Mode: strings.TrimSpace(route.Action.IdempotencyDecision)},
 	}, nil
 }
 

@@ -9,6 +9,8 @@ package modulecapability
 import (
 	"context"
 	"encoding/json"
+
+	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
 const (
@@ -143,21 +145,12 @@ type OpenAPIFragment struct {
 	Components map[string]map[string]json.RawMessage `json:"components,omitempty"`
 }
 
-type AuthorizationMode string
-
-const (
-	AuthorizationAnonymous AuthorizationMode = "anonymous"
-	AuthorizationPrincipal AuthorizationMode = "principal"
-	AuthorizationFixed     AuthorizationMode = "fixed"
-	AuthorizationDynamic   AuthorizationMode = "owner_dynamic"
-)
-
 type Authorization struct {
-	Mode           AuthorizationMode `json:"mode"`
-	AllOf          []string          `json:"all_of,omitempty"`
-	AnyOf          []string          `json:"any_of,omitempty"`
-	PolicyKey      string            `json:"policy_key,omitempty"`
-	WorkspaceScope string            `json:"workspace_scope,omitempty"`
+	Strategy       actioncontract.AuthorizationStrategy `json:"strategy,omitempty"`
+	Permission     string                               `json:"permission,omitempty"`
+	PolicyKey      string                               `json:"policy_key,omitempty"`
+	Audiences      []string                             `json:"audiences,omitempty"`
+	WorkspaceScope string                               `json:"workspace_scope,omitempty"`
 }
 
 type EffectClass string

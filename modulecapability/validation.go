@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
 var keyPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$`)
@@ -419,27 +421,51 @@ func validateOperationExtension(value any) error {
 		return fmt.Errorf("%s provider key is invalid", OperationExtensionKey)
 	}
 	authorization := extension.Authorization
-	switch authorization.Mode {
-	case AuthorizationAnonymous:
-		if len(authorization.AllOf) != 0 || len(authorization.AnyOf) != 0 || authorization.PolicyKey != "" || authorization.WorkspaceScope != "" {
-			return fmt.Errorf("anonymous authorization cannot declare principal policy")
+	switch authorization.Strategy {
+	case actioncontract.AuthorizationExactRolePermission:
+		if !keyPattern.MatchString(authorization.Permission) || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("exact permission authorization is invalid")
 		}
-	case AuthorizationPrincipal:
-		if len(authorization.AllOf) != 0 || len(authorization.AnyOf) != 0 || authorization.PolicyKey != "" || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+	case actioncontract.AuthorizationAnonymousProtocol:
+		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || authorization.WorkspaceScope != "" {
+			return fmt.Errorf("anonymous authorization is invalid")
+		}
+	case actioncontract.AuthorizationDelegatedCredential:
+		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("delegated credential authorization is invalid")
+		}
+	case actioncontract.AuthorizationAuthenticatedPrincipal:
+		if authorization.Permission != "" || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
 			return fmt.Errorf("principal authorization is invalid")
 		}
-	case AuthorizationFixed:
-		if len(authorization.AllOf) == 0 && len(authorization.AnyOf) == 0 || len(authorization.AllOf) != 0 && len(authorization.AnyOf) != 0 || authorization.PolicyKey != "" || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("fixed authorization is invalid")
+	case actioncontract.AuthorizationSelfOrPermission:
+		if !keyPattern.MatchString(authorization.Permission) || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("self-or-permission authorization is invalid")
 		}
-	case AuthorizationDynamic:
-		if len(authorization.AllOf) != 0 || len(authorization.AnyOf) != 0 || !keyPattern.MatchString(authorization.PolicyKey) || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("owner-dynamic authorization is invalid")
+	case actioncontract.AuthorizationServiceIdentity:
+		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || duplicateOrBlankStrings(authorization.Audiences) || len(authorization.Audiences) == 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("service identity authorization is invalid")
+		}
+	case actioncontract.AuthorizationOperationsIdentity:
+		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("operations identity authorization is invalid")
 		}
 	default:
-		return fmt.Errorf("authorization mode is invalid")
+		return fmt.Errorf("authorization strategy is invalid")
 	}
 	return nil
+}
+
+func duplicateOrBlankStrings(values []string) bool {
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return true
+		}
+		seen[value] = true
+	}
+	return false
 }
 
 func collectReferences(value any, result map[string]bool) error {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 
 	"github.com/domainry/domainry-foundation/modulecapability"
+	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
 // NewFixtureBinding returns the smallest valid capability bundle for transport
@@ -13,7 +14,7 @@ func NewFixtureBinding(moduleKey string) (*modulecapability.StaticBinding, error
 	operation, err := json.Marshal(map[string]any{
 		"operationId": moduleKey + "Fixture", "responses": map[string]any{"200": map[string]any{"description": "fixture"}},
 		modulecapability.OperationExtensionKey: modulecapability.OperationExtension{
-			Owner: moduleKey, Authorization: modulecapability.Authorization{Mode: modulecapability.AuthorizationAnonymous},
+			Owner: moduleKey, Authorization: modulecapability.Authorization{Strategy: actioncontract.AuthorizationAnonymousProtocol, PolicyKey: moduleKey + ".test_protocol"},
 			Effect: modulecapability.EffectRead, Idempotency: modulecapability.Idempotency{Mode: "not_applicable"},
 		},
 	})

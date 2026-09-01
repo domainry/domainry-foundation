@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
 func TestStaticAndRemoteBindingsHaveCanonicalParity(t *testing.T) {
@@ -292,7 +294,7 @@ func testContract(t *testing.T) (ModuleSummary, []CategoryDocument) {
 	t.Helper()
 	extension, err := json.Marshal(OperationExtension{
 		Owner:         "sample",
-		Authorization: Authorization{Mode: AuthorizationDynamic, PolicyKey: "sample.execute", WorkspaceScope: "authenticated_workspace"},
+		Authorization: Authorization{Strategy: actioncontract.AuthorizationOperationsIdentity, PolicyKey: "sample.execute", WorkspaceScope: "authenticated_workspace"},
 		Effect:        EffectWrite,
 		Idempotency:   Idempotency{Mode: "caller_key_required", KeySource: "Idempotency-Key"},
 	})

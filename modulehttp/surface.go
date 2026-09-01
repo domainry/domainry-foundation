@@ -8,72 +8,35 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
+
+	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
-const ContractVersion = "domainry-module-http-surface-v1"
+const ContractVersion = "domainry-module-http-surface-v2"
 
-type Exposure string
+type Exposure = actioncontract.Exposure
 
 const (
-	ExposurePublic      Exposure = "public"
-	ExposureTenantAdmin Exposure = "tenant_admin"
-	ExposureOps         Exposure = "ops"
+	ExposurePublic      = actioncontract.ExposurePublic
+	ExposureTenantAdmin = actioncontract.ExposureTenantAdmin
+	ExposureOps         = actioncontract.ExposureOps
 )
 
-type Authentication string
-
-const (
-	AuthenticationAnonymous     Authentication = "anonymous"
-	AuthenticationAuthenticated Authentication = "authenticated"
-	AuthenticationService       Authentication = "service"
-)
-
-// EffectClass classifies whether a route observes state or can change it. The
-// host uses this declaration to apply transport governance without importing a
-// capability's product-domain implementation.
-type EffectClass string
-
-const (
-	EffectRead  EffectClass = "read"
-	EffectWrite EffectClass = "write"
-)
-
-// HighRiskPolicy declares the common evidence a host must verify before a
-// request reaches the module handler. Domain-specific authorization remains
-// owned by the module application service.
-type HighRiskPolicy string
-
-const (
-	HighRiskNone                 HighRiskPolicy = "none"
-	HighRiskReasonRequired       HighRiskPolicy = "reason_required"
-	HighRiskConfirmationRequired HighRiskPolicy = "confirmation_required"
-	HighRiskBreakGlassRequired   HighRiskPolicy = "break_glass_required"
-)
-
-// Governance is optional for compatibility with existing v1 module surfaces.
-// New product routes should declare it so the host can enforce the same
-// transport policy regardless of whether the capability runs in Runtime or in
-// an embedded module.
-type Governance struct {
-	EffectClass         EffectClass
-	HighRiskPolicy      HighRiskPolicy
-	IdempotencyDecision string
-	AuditClass          string
+// Route contains one canonical, source-owned Action declaration. The host
+// derives the HTTP pattern, exposure, authorization and transport governance
+// from Action; Route intentionally has no second permission policy shape.
+type Route struct {
+	Action actioncontract.ActionDefinition
 }
 
-// Route is a host-enforced declaration. Permission is required for an
-// authenticated or service route unless the route is explicitly classified as
-// principal_only. Anonymous routes are intended for authentication bootstrap,
-// callbacks, health or other reviewed public protocols.
-type Route struct {
-	Pattern        string
-	Exposures      []Exposure
-	Authentication Authentication
-	Permission     string
-	AnyPermissions []string
-	PrincipalOnly  bool
-	Governance     *Governance
+// Pattern returns the exact net/http registration identity owned by Action.
+func (route Route) Pattern() string {
+	if route.Action.HTTP == nil {
+		return ""
+	}
+	return strings.TrimSpace(route.Action.HTTP.Method) + " " + strings.TrimSpace(route.Action.HTTP.RouteTemplate)
 }
 
 type AuditEvent struct {
@@ -97,6 +60,108 @@ type Surface interface {
 
 type Provider interface {
 	HTTPSurfaces() []Surface
+}
+
+// AuthorizationActions returns the detached Action manifest carried by an
+// HTTP-only module's Surfaces. A module that also owns non-HTTP Actions must
+// implement action.Provider and use ValidateAuthorizationProjection to prove
+// that its HTTP routes are exact projections of that complete manifest.
+func AuthorizationActions(provider Provider) ([]actioncontract.ActionDefinition, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("module HTTP provider is required")
+	}
+	return AuthorizationActionsFromSurfaces(provider.HTTPSurfaces())
+}
+
+// AuthorizationActionsFromSurfaces is the slice form used after a host has
+// already detached its module Surface inventory.
+func AuthorizationActionsFromSurfaces(surfaces []Surface) ([]actioncontract.ActionDefinition, error) {
+	definitions := []actioncontract.ActionDefinition{}
+	seen := map[string]bool{}
+	for _, surface := range surfaces {
+		if err := ValidateSurface(surface); err != nil {
+			return nil, err
+		}
+		for _, route := range surface.Routes() {
+			definition, err := actioncontract.NormalizeDefinition(route.Action)
+			if err != nil {
+				return nil, fmt.Errorf("module HTTP surface %q action: %w", surface.Owner(), err)
+			}
+			if seen[definition.Key] {
+				return nil, fmt.Errorf("module HTTP action %q is mounted more than once", definition.Key)
+			}
+			seen[definition.Key] = true
+			definitions = append(definitions, definition)
+		}
+	}
+	return definitions, nil
+}
+
+// ValidateSourceOwners enforces the canonical module owner convention without
+// applying it to host-owned Surfaces that happen to use the same transport
+// contract.
+func ValidateSourceOwners(provider Provider) error {
+	if provider == nil {
+		return fmt.Errorf("module HTTP provider is required")
+	}
+	for _, surface := range provider.HTTPSurfaces() {
+		if err := ValidateSurface(surface); err != nil {
+			return err
+		}
+		expectedOwner := "module:" + strings.TrimSpace(surface.Owner())
+		for _, route := range surface.Routes() {
+			definition, err := actioncontract.NormalizeDefinition(route.Action)
+			if err != nil {
+				return fmt.Errorf("module HTTP surface %q action: %w", surface.Owner(), err)
+			}
+			if definition.Owner != expectedOwner {
+				return fmt.Errorf("module HTTP surface %q action %q owner=%q want=%q", surface.Owner(), definition.Key, definition.Owner, expectedOwner)
+			}
+		}
+	}
+	return nil
+}
+
+// ValidateAuthorizationProjection proves that every active HTTP Action in a
+// module's complete source manifest has exactly one byte-for-byte-equivalent
+// normalized Surface route, and that no Surface invents an extra Action. A nil
+// HTTP provider is valid only for a manifest containing no active HTTP Action.
+func ValidateAuthorizationProjection(definitions []actioncontract.ActionDefinition, provider Provider) error {
+	manifest := make(map[string]actioncontract.ActionDefinition, len(definitions))
+	for index := range definitions {
+		definition, err := actioncontract.NormalizeDefinition(definitions[index])
+		if err != nil {
+			return fmt.Errorf("module authorization Action %d: %w", index, err)
+		}
+		if _, duplicate := manifest[definition.Key]; duplicate {
+			return fmt.Errorf("module Action manifest repeats %q", definition.Key)
+		}
+		manifest[definition.Key] = definition
+	}
+
+	mounted := map[string]bool{}
+	if provider != nil {
+		routes, err := AuthorizationActions(provider)
+		if err != nil {
+			return err
+		}
+		for _, routeAction := range routes {
+			canonical, found := manifest[routeAction.Key]
+			if !found {
+				return fmt.Errorf("module HTTP action %q is absent from its source manifest", routeAction.Key)
+			}
+			if !reflect.DeepEqual(routeAction, canonical) {
+				return fmt.Errorf("module HTTP action %q differs from its source manifest", routeAction.Key)
+			}
+			mounted[routeAction.Key] = true
+		}
+	}
+	for _, definition := range manifest {
+		if definition.LifecycleStatus != actioncontract.LifecycleRetired && definition.HTTP != nil && !mounted[definition.Key] {
+			return fmt.Errorf("module HTTP action %q has no mounted surface route", definition.Key)
+		}
+	}
+	return nil
 }
 
 // OpenAPIProvider is implemented by a Surface that owns full OpenAPI
@@ -128,10 +193,11 @@ func ValidateSurface(surface Surface) error {
 		if err := ValidateRoute(route); err != nil {
 			return fmt.Errorf("module HTTP surface %q/%q: %w", owner, name, err)
 		}
-		if seen[route.Pattern] {
-			return fmt.Errorf("module HTTP surface %q/%q declares route %q more than once", owner, name, route.Pattern)
+		pattern := route.Pattern()
+		if seen[pattern] {
+			return fmt.Errorf("module HTTP surface %q/%q declares route %q more than once", owner, name, pattern)
 		}
-		seen[route.Pattern] = true
+		seen[pattern] = true
 	}
 	if provider, ok := surface.(OpenAPIProvider); ok {
 		for pattern, operation := range provider.OpenAPIOperations() {
@@ -147,65 +213,27 @@ func ValidateSurface(surface Surface) error {
 }
 
 func ValidateRoute(route Route) error {
-	if strings.TrimSpace(route.Pattern) == "" {
-		return fmt.Errorf("route pattern is required")
+	definition, err := actioncontract.NormalizeDefinition(route.Action)
+	if err != nil {
+		return fmt.Errorf("module HTTP route action: %w", err)
 	}
-	if len(route.Exposures) == 0 {
-		return fmt.Errorf("route %q has no exposure", route.Pattern)
-	}
-	exposures := map[Exposure]bool{}
-	for _, exposure := range route.Exposures {
-		switch exposure {
-		case ExposurePublic, ExposureTenantAdmin, ExposureOps:
-		default:
-			return fmt.Errorf("route %q has unsupported exposure %q", route.Pattern, exposure)
-		}
-		if exposures[exposure] {
-			return fmt.Errorf("route %q repeats exposure %q", route.Pattern, exposure)
-		}
-		exposures[exposure] = true
-	}
-	switch route.Authentication {
-	case AuthenticationAnonymous:
-		if strings.TrimSpace(route.Permission) != "" || len(route.AnyPermissions) != 0 || route.PrincipalOnly {
-			return fmt.Errorf("anonymous route %q cannot declare principal authorization", route.Pattern)
-		}
-	case AuthenticationAuthenticated, AuthenticationService:
-		if strings.TrimSpace(route.Permission) == "" && len(route.AnyPermissions) == 0 && !route.PrincipalOnly {
-			return fmt.Errorf("authorized route %q requires a permission or principal_only", route.Pattern)
-		}
-		if strings.TrimSpace(route.Permission) != "" && len(route.AnyPermissions) != 0 {
-			return fmt.Errorf("authorized route %q cannot combine permission and any_permissions", route.Pattern)
-		}
-	default:
-		return fmt.Errorf("route %q has unsupported authentication %q", route.Pattern, route.Authentication)
-	}
-	if route.Governance != nil {
-		if err := validateGovernance(route.Pattern, *route.Governance); err != nil {
-			return err
-		}
+	if definition.HTTP == nil {
+		return fmt.Errorf("module HTTP route action %q has no HTTP binding", definition.Key)
 	}
 	return nil
 }
 
-func validateGovernance(pattern string, governance Governance) error {
-	switch governance.EffectClass {
-	case EffectRead, EffectWrite:
-	default:
-		return fmt.Errorf("route %q has unsupported effect class %q", pattern, governance.EffectClass)
+// RouteFromAction validates and detaches one canonical HTTP Action.
+func RouteFromAction(definition actioncontract.ActionDefinition) (Route, error) {
+	var err error
+	definition, err = actioncontract.NormalizeDefinition(definition)
+	if err != nil {
+		return Route{}, err
 	}
-	switch governance.HighRiskPolicy {
-	case HighRiskNone, HighRiskReasonRequired, HighRiskConfirmationRequired, HighRiskBreakGlassRequired:
-	default:
-		return fmt.Errorf("route %q has unsupported high-risk policy %q", pattern, governance.HighRiskPolicy)
+	if definition.HTTP == nil {
+		return Route{}, fmt.Errorf("action %q has no HTTP binding", definition.Key)
 	}
-	if strings.TrimSpace(governance.IdempotencyDecision) == "" {
-		return fmt.Errorf("route %q requires an idempotency decision", pattern)
-	}
-	if strings.TrimSpace(governance.AuditClass) == "" {
-		return fmt.Errorf("route %q requires an audit class", pattern)
-	}
-	return nil
+	return Route{Action: definition}, nil
 }
 
 func stringValue(value any) string {

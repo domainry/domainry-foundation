@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
 type testSurface struct {
@@ -12,6 +14,12 @@ type testSurface struct {
 	name     string
 	routes   []Route
 	handler  http.Handler
+}
+
+type testProvider struct{ surfaces []Surface }
+
+func (provider testProvider) HTTPSurfaces() []Surface {
+	return append([]Surface(nil), provider.surfaces...)
 }
 
 func (surface testSurface) ContractVersion() string { return surface.contract }
@@ -24,8 +32,8 @@ func TestValidateSurfaceAcceptsHostEnforcedModuleRoutes(t *testing.T) {
 	surface := testSurface{
 		contract: ContractVersion, owner: "party", name: "party_management", handler: http.NotFoundHandler(),
 		routes: []Route{
-			{Pattern: "GET /party/{partyID}", Exposures: []Exposure{ExposureTenantAdmin}, Authentication: AuthenticationAuthenticated, Permission: "party.read"},
-			{Pattern: "GET /party/me", Exposures: []Exposure{ExposurePublic, ExposureTenantAdmin}, Authentication: AuthenticationAuthenticated, PrincipalOnly: true},
+			mustTestRoute(t, actionTestDefinition()),
+			mustTestRoute(t, principalActionTestDefinition()),
 		},
 	}
 	if err := ValidateSurface(surface); err != nil {
@@ -39,10 +47,12 @@ func TestValidateSurfaceRejectsIncompleteAuthorityDeclarations(t *testing.T) {
 		route Route
 		want  string
 	}{
-		{name: "no exposure", route: Route{Pattern: "GET /party", Authentication: AuthenticationAuthenticated, Permission: "party.read"}, want: "no exposure"},
-		{name: "ambient authenticated", route: Route{Pattern: "GET /party", Exposures: []Exposure{ExposureTenantAdmin}, Authentication: AuthenticationAuthenticated}, want: "requires a permission"},
-		{name: "anonymous permission", route: Route{Pattern: "GET /auth/callback", Exposures: []Exposure{ExposurePublic}, Authentication: AuthenticationAnonymous, Permission: "identity.login"}, want: "cannot declare"},
-		{name: "unknown exposure", route: Route{Pattern: "GET /party", Exposures: []Exposure{"private"}, Authentication: AuthenticationAuthenticated, Permission: "party.read"}, want: "unsupported exposure"},
+		{name: "no exposure", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) { action.Exposures = nil }), want: "requires an exposure"},
+		{name: "ambient authenticated", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) { action.Permission = nil }), want: "invalid authorization"},
+		{name: "anonymous permission", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) {
+			action.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAnonymousProtocol, PolicyKey: "identity.login"}
+		}), want: "invalid authorization"},
+		{name: "unknown exposure", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) { action.Exposures = []actioncontract.Exposure{"private"} }), want: "unsupported exposure"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -56,7 +66,7 @@ func TestValidateSurfaceRejectsIncompleteAuthorityDeclarations(t *testing.T) {
 }
 
 func TestValidateSurfaceRejectsDuplicateRoutes(t *testing.T) {
-	route := Route{Pattern: "GET /party", Exposures: []Exposure{ExposureTenantAdmin}, Authentication: AuthenticationAuthenticated, Permission: "party.read"}
+	route := mustTestRoute(t, actionTestDefinition())
 	surface := testSurface{contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(), routes: []Route{route, route}}
 	if err := ValidateSurface(surface); err == nil || !strings.Contains(err.Error(), "more than once") {
 		t.Fatalf("unexpected error: %v", err)
@@ -64,20 +74,21 @@ func TestValidateSurfaceRejectsDuplicateRoutes(t *testing.T) {
 }
 
 func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
-	route := Route{
-		Pattern: "POST /reports/{reportKey}/snapshots/refresh", Exposures: []Exposure{ExposurePublic},
-		Authentication: AuthenticationAuthenticated, PrincipalOnly: true,
-		Governance: &Governance{EffectClass: EffectWrite, HighRiskPolicy: HighRiskNone, IdempotencyDecision: "caller_key_required", AuditClass: "mutation_audit_required"},
-	}
+	action := principalActionTestDefinition()
+	action.Key, action.OperationKey, action.OperationLabel, action.Label = "reports.snapshots.refresh", "refresh", "Refresh", "Refresh report snapshot"
+	action.HTTP = &actioncontract.HTTPBinding{Method: "POST", RouteTemplate: "/reports/{reportKey}/snapshots/refresh"}
+	action.EffectClass, action.RiskLevel = actioncontract.EffectWrite, actioncontract.RiskMedium
+	action.IdempotencyDecision, action.AuditClass = "caller_key_required", "mutation_audit_required"
+	route := mustTestRoute(t, action)
 	surface := governedTestSurface{testSurface: testSurface{contract: ContractVersion, owner: "report", name: "reports", handler: http.NotFoundHandler(), routes: []Route{route}}, operations: map[string]map[string]any{
-		route.Pattern: {"operationId": "refreshReportSnapshot"},
+		route.Pattern(): {"operationId": "refreshReportSnapshot"},
 	}}
 	if err := ValidateSurface(surface); err != nil {
 		t.Fatalf("validate governed surface: %v", err)
 	}
 
 	invalid := route
-	invalid.Governance = &Governance{EffectClass: EffectWrite, HighRiskPolicy: HighRiskNone}
+	invalid.Action.IdempotencyDecision = ""
 	if err := ValidateRoute(invalid); err == nil || !strings.Contains(err.Error(), "idempotency decision") {
 		t.Fatalf("unexpected governance error: %v", err)
 	}
@@ -86,6 +97,168 @@ func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
 	if err := ValidateSurface(surface); err == nil || !strings.Contains(err.Error(), "undeclared route") {
 		t.Fatalf("unexpected OpenAPI ownership error: %v", err)
 	}
+}
+
+func TestRouteFromCanonicalActionIsLosslessForSupportedStrategies(t *testing.T) {
+	definition := actionTestDefinition()
+	route, err := RouteFromAction(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRoute(route); err != nil {
+		t.Fatal(err)
+	}
+	if route.Pattern() != "GET /party/{partyID}" || route.Action.Permission == nil || route.Action.Permission.Key != "party.read" || route.Action.Key != definition.Key {
+		t.Fatalf("route=%#v", route)
+	}
+}
+
+func TestHTTPBindingChangePreservesActionAndPermissionIdentityWithoutAlias(t *testing.T) {
+	before := actionTestDefinition()
+	after := actioncontract.CloneDefinition(before)
+	after.HTTP.RouteTemplate = "/parties/{partyID}"
+	after.HTTP.DisplayRouteTemplate = "/parties/{partyID}"
+
+	registry := actioncontract.NewRegistry()
+	if err := registry.Register(after); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	resolved, found := registry.ResolveHTTP(http.MethodGet, "/parties/{partyID}")
+	if !found || resolved.Key != before.Key || resolved.Permission == nil || resolved.Permission.Key != before.Permission.Key {
+		t.Fatalf("updated binding changed authorization identity: action=%#v found=%t", resolved, found)
+	}
+	if _, found := registry.ResolveHTTP(http.MethodGet, before.HTTP.RouteTemplate); found {
+		t.Fatal("old HTTP binding survived as an implicit authorization alias")
+	}
+}
+
+func TestRouteFromCanonicalActionSupportsExceptionalStrategy(t *testing.T) {
+	definition := actionTestDefinition()
+	for name, authorization := range map[string]actioncontract.Authorization{
+		"service policy": {Strategy: actioncontract.AuthorizationServiceIdentity, PolicyKey: "party.service.verify", Audiences: []string{"party_service"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := definition
+			candidate.Authorization = authorization
+			candidate.Permission = nil
+			route, err := RouteFromAction(candidate)
+			if err != nil || route.Action.Authorization.Strategy != actioncontract.AuthorizationServiceIdentity {
+				t.Fatalf("route=%#v error=%v", route, err)
+			}
+		})
+	}
+}
+
+func TestRouteHasNoParallelPermissionPolicy(t *testing.T) {
+	route := mustTestRoute(t, actionTestDefinition())
+	if route.Action.Permission == nil || route.Action.Permission.Key != route.Action.Key {
+		t.Fatalf("route action=%#v", route.Action)
+	}
+}
+
+func TestAuthorizationActionsUsesHTTPRoutesAsTheHTTPOnlyManifest(t *testing.T) {
+	definition := actionTestDefinition()
+	definition.Owner = "module:party"
+	definition.Permission.Owner = "module:party"
+	provider := testProvider{surfaces: []Surface{testSurface{
+		contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(),
+		routes: []Route{mustTestRoute(t, definition)},
+	}}}
+	actions, err := AuthorizationActions(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || actions[0].Key != definition.Key {
+		t.Fatalf("actions=%#v", actions)
+	}
+	actions[0].Label = "mutated"
+	again, err := AuthorizationActions(provider)
+	if err != nil || again[0].Label == "mutated" {
+		t.Fatalf("provider manifest was not detached: actions=%#v error=%v", again, err)
+	}
+}
+
+func TestValidateSourceOwnersRejectsHostOrModuleOwnerDrift(t *testing.T) {
+	definition := actionTestDefinition()
+	provider := testProvider{surfaces: []Surface{testSurface{
+		contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(),
+		routes: []Route{mustTestRoute(t, definition)},
+	}}}
+	if err := ValidateSourceOwners(provider); err == nil || !strings.Contains(err.Error(), `owner="party:module" want="module:party"`) {
+		t.Fatalf("owner drift error=%v", err)
+	}
+}
+
+func TestValidateAuthorizationProjectionAcceptsNonHTTPAndRejectsSurfaceDrift(t *testing.T) {
+	httpAction := actionTestDefinition()
+	httpAction.Owner = "module:party"
+	httpAction.Permission.Owner = "module:party"
+	nonHTTP := principalActionTestDefinition()
+	nonHTTP.Key = "party.jobs.run"
+	nonHTTP.Owner = "module:party"
+	nonHTTP.OperationKey, nonHTTP.OperationLabel, nonHTTP.Label = "run", "Run", "Run party job"
+	nonHTTP.HTTP = nil
+	nonHTTP.NonHTTP = []actioncontract.NonHTTPBinding{{Kind: "job", InvocationKey: "party.jobs.run"}}
+	provider := testProvider{surfaces: []Surface{testSurface{
+		contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(),
+		routes: []Route{mustTestRoute(t, httpAction)},
+	}}}
+	if err := ValidateAuthorizationProjection([]actioncontract.ActionDefinition{httpAction, nonHTTP}, provider); err != nil {
+		t.Fatal(err)
+	}
+
+	drifted := httpAction
+	drifted.Label = "Drifted"
+	if err := ValidateAuthorizationProjection([]actioncontract.ActionDefinition{drifted, nonHTTP}, provider); err == nil || !strings.Contains(err.Error(), "differs from its source manifest") {
+		t.Fatalf("drift error=%v", err)
+	}
+	if err := ValidateAuthorizationProjection([]actioncontract.ActionDefinition{httpAction}, nil); err == nil || !strings.Contains(err.Error(), "no mounted surface route") {
+		t.Fatalf("missing surface error=%v", err)
+	}
+}
+
+func actionTestDefinition() actioncontract.ActionDefinition {
+	return actioncontract.ActionDefinition{
+		Key: "party.read", Owner: "party:module", SourceKind: "module_surface",
+		CapabilityKey: "party.management", CapabilityLabel: "Party management",
+		OperationKey: "read", OperationLabel: "Read", Label: "Get party",
+		Exposures:     []actioncontract.Exposure{actioncontract.ExposureTenantAdmin},
+		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationExactRolePermission},
+		HTTP:          &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/{partyID}", DisplayRouteTemplate: "/party/{partyID}"},
+		Permission: &actioncontract.PermissionDefinition{
+			Key: "party.read", Owner: "party:module", ResourceKey: "party", ActionKey: "read", Label: "Party · Read",
+			Category: "Party management", LifecycleStatus: actioncontract.LifecycleActive,
+		},
+		EffectClass: actioncontract.EffectRead, RiskLevel: actioncontract.RiskLow,
+		IdempotencyDecision: "not_applicable", AuditClass: "party_read", LifecycleStatus: actioncontract.LifecycleActive,
+	}
+}
+
+func principalActionTestDefinition() actioncontract.ActionDefinition {
+	definition := actionTestDefinition()
+	definition.Key, definition.OperationKey, definition.OperationLabel, definition.Label = "party.me.read", "me.read", "Read self", "Get current party"
+	definition.HTTP = &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/me"}
+	definition.Exposures = []actioncontract.Exposure{actioncontract.ExposurePublic, actioncontract.ExposureTenantAdmin}
+	definition.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticatedPrincipal}
+	definition.Permission = nil
+	return definition
+}
+
+func mustTestRoute(t *testing.T, definition actioncontract.ActionDefinition) Route {
+	t.Helper()
+	route, err := RouteFromAction(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return route
+}
+
+func mutateTestRoute(definition actioncontract.ActionDefinition, mutate func(*actioncontract.ActionDefinition)) Route {
+	mutate(&definition)
+	return Route{Action: definition}
 }
 
 type governedTestSurface struct {

@@ -3,15 +3,27 @@ package modulecapability
 import (
 	"testing"
 
+	actioncontract "github.com/domainry/domainry-foundation/action"
 	"github.com/domainry/domainry-foundation/modulehttp"
 )
 
 func TestCategoryFromHTTPRoutesRequiresCompleteOwnerManifest(t *testing.T) {
-	route := modulehttp.Route{Pattern: "GET /examples/{exampleID}", Exposures: []modulehttp.Exposure{modulehttp.ExposurePublic}, Authentication: modulehttp.AuthenticationAuthenticated, Permission: "example.read", Governance: &modulehttp.Governance{EffectClass: modulehttp.EffectRead, HighRiskPolicy: modulehttp.HighRiskNone, IdempotencyDecision: "not_applicable", AuditClass: "owner_read"}}
+	route, err := modulehttp.RouteFromAction(actioncontract.ActionDefinition{
+		Key: "example.read", Owner: "module:example", SourceKind: "module_surface", CapabilityKey: "example", CapabilityLabel: "Example",
+		OperationKey: "read", OperationLabel: "Read", Label: "Read example", Exposures: []actioncontract.Exposure{actioncontract.ExposurePublic},
+		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationExactRolePermission},
+		HTTP:          &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/examples/{exampleID}"}, Permission: &actioncontract.PermissionDefinition{
+			Key: "example.read", Owner: "module:example", ResourceKey: "example", ActionKey: "read", Label: "Example · Read", Category: "Example", LifecycleStatus: actioncontract.LifecycleActive,
+		},
+		EffectClass: actioncontract.EffectRead, RiskLevel: actioncontract.RiskLow, IdempotencyDecision: "not_applicable", AuditClass: "owner_read", LifecycleStatus: actioncontract.LifecycleActive,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	document, err := CategoryFromHTTPRoutes(HTTPRouteCategory{
 		Owner: "example", Category: CategorySummary{Key: "example.read", Name: "Example", Description: "Read examples.", AssemblyChains: []string{"example_chain"}, ValidationScopes: []string{"example.query"}},
 		ValidationContracts: []ValidationScopeContract{{Kind: "example.query", Description: "Validate example authoring queries.", Coverage: ValidationCoverageAllCandidates, CandidateCollections: []string{"examples"}}},
-		Routes:              []modulehttp.Route{route}, Operations: map[string]map[string]any{route.Pattern: {"operationId": "getExample", "parameters": []any{map[string]any{"name": "exampleID", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "example"}}}},
+		Routes:              []modulehttp.Route{route}, Operations: map[string]map[string]any{route.Pattern(): {"operationId": "getExample", "parameters": []any{map[string]any{"name": "exampleID", "in": "path", "required": true, "schema": map[string]any{"type": "string"}}}, "responses": map[string]any{"200": map[string]any{"description": "example"}}}},
 	})
 	if err != nil {
 		t.Fatal(err)
