@@ -91,7 +91,7 @@ func normalizeDefinition(source ActionDefinition) ActionDefinition {
 		permission.Key = strings.TrimSpace(permission.Key)
 		permission.Owner = strings.TrimSpace(permission.Owner)
 		permission.ResourceKey = strings.TrimSpace(permission.ResourceKey)
-		permission.ActionKey = strings.TrimSpace(permission.ActionKey)
+		permission.OperationKey = strings.TrimSpace(permission.OperationKey)
 		permission.Label = strings.TrimSpace(permission.Label)
 		permission.Description = strings.TrimSpace(permission.Description)
 		permission.Category = strings.TrimSpace(permission.Category)
@@ -264,7 +264,7 @@ func validateAuthorization(definition ActionDefinition) error {
 
 func validatePermissionDefinition(action ActionDefinition, permission PermissionDefinition) error {
 	if !stableKeyPattern.MatchString(permission.Key) || !stableKeyPattern.MatchString(permission.Owner) ||
-		!stableKeyPattern.MatchString(permission.ResourceKey) || !stableKeyPattern.MatchString(permission.ActionKey) ||
+		!stableKeyPattern.MatchString(permission.ResourceKey) || !stableKeyPattern.MatchString(permission.OperationKey) ||
 		permission.Label == "" || permission.Category == "" {
 		return fmt.Errorf("action %q has an incomplete owned permission", action.Key)
 	}
@@ -273,6 +273,9 @@ func validatePermissionDefinition(action ActionDefinition, permission Permission
 	}
 	if permission.Key != action.Key {
 		return fmt.Errorf("action %q permission key must equal its action key", action.Key)
+	}
+	if permission.Key != permission.ResourceKey+"."+permission.OperationKey {
+		return fmt.Errorf("action %q permission resource and operation must compose its key", action.Key)
 	}
 	if permission.LifecycleStatus != LifecycleActive && permission.LifecycleStatus != LifecycleRetired {
 		return fmt.Errorf("action %q permission %q has unsupported lifecycle status %q", action.Key, permission.Key, permission.LifecycleStatus)

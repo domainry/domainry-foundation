@@ -8,14 +8,16 @@ import (
 const testOwner = "orders:builtin"
 
 func permissionAction(key string, bindings ...HTTPBinding) ActionDefinition {
+	separator := strings.LastIndex(key, ".")
+	resourceKey, operationKey := key[:separator], key[separator+1:]
 	definition := ActionDefinition{
 		Key: key, Owner: testOwner, SourceKind: "builtin_surface",
 		CapabilityKey: "orders.management", CapabilityLabel: "Order management",
-		OperationKey: "read", OperationLabel: "Read", Label: "Read orders",
+		OperationKey: operationKey, OperationLabel: "Read", Label: "Read orders",
 		Exposures:     []Exposure{ExposureTenantAdmin},
 		Authorization: Authorization{Strategy: AuthorizationExactRolePermission},
 		Permission: &PermissionDefinition{
-			Key: key, Owner: testOwner, ResourceKey: "orders", ActionKey: "read",
+			Key: key, Owner: testOwner, ResourceKey: resourceKey, OperationKey: operationKey,
 			Label: "Orders · Read", Category: "Order management", LifecycleStatus: LifecycleActive,
 		},
 		EffectClass: EffectRead, RiskLevel: RiskLow,
@@ -25,6 +27,14 @@ func permissionAction(key string, bindings ...HTTPBinding) ActionDefinition {
 		definition.HTTP = &bindings[0]
 	}
 	return definition
+}
+
+func TestPermissionResourceAndOperationComposeActionKey(t *testing.T) {
+	definition := permissionAction("orders.read")
+	definition.Permission.ResourceKey = "customers"
+	if err := ValidateDefinition(definition); err == nil {
+		t.Fatal("permission display fragments must compose the exact action key")
+	}
 }
 
 func TestRegistryFreezesOneActionWithOnePermission(t *testing.T) {

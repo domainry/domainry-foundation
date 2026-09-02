@@ -13,7 +13,7 @@ func TestCategoryFromHTTPRoutesRequiresCompleteOwnerManifest(t *testing.T) {
 		OperationKey: "read", OperationLabel: "Read", Label: "Read example", Exposures: []actioncontract.Exposure{actioncontract.ExposurePublic},
 		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationExactRolePermission},
 		HTTP:          &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/examples/{exampleID}"}, Permission: &actioncontract.PermissionDefinition{
-			Key: "example.read", Owner: "module:example", ResourceKey: "example", ActionKey: "read", Label: "Example · Read", Category: "Example", LifecycleStatus: actioncontract.LifecycleActive,
+			Key: "example.read", Owner: "module:example", ResourceKey: "example", OperationKey: "read", Label: "Example · Read", Category: "Example", LifecycleStatus: actioncontract.LifecycleActive,
 		},
 		EffectClass: actioncontract.EffectRead, RiskLevel: actioncontract.RiskLow, IdempotencyDecision: "not_applicable", AuditClass: "owner_read", LifecycleStatus: actioncontract.LifecycleActive,
 	})

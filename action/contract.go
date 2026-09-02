@@ -90,7 +90,7 @@ type PermissionDefinition struct {
 	Key             string          `json:"key"`
 	Owner           string          `json:"owner"`
 	ResourceKey     string          `json:"resource_key"`
-	ActionKey       string          `json:"action_key"`
+	OperationKey    string          `json:"operation_key"`
 	Label           string          `json:"label"`
 	Description     string          `json:"description,omitempty"`
 	Category        string          `json:"category"`

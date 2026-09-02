@@ -229,7 +229,7 @@ func actionTestDefinition() actioncontract.ActionDefinition {
 		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationExactRolePermission},
 		HTTP:          &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/{partyID}", DisplayRouteTemplate: "/party/{partyID}"},
 		Permission: &actioncontract.PermissionDefinition{
-			Key: "party.read", Owner: "party:module", ResourceKey: "party", ActionKey: "read", Label: "Party · Read",
+			Key: "party.read", Owner: "party:module", ResourceKey: "party", OperationKey: "read", Label: "Party · Read",
 			Category: "Party management", LifecycleStatus: actioncontract.LifecycleActive,
 		},
 		EffectClass: actioncontract.EffectRead, RiskLevel: actioncontract.RiskLow,
