@@ -294,7 +294,7 @@ func testContract(t *testing.T) (ModuleSummary, []CategoryDocument) {
 	t.Helper()
 	extension, err := json.Marshal(OperationExtension{
 		Owner:         "sample",
-		Authorization: Authorization{Strategy: actioncontract.AuthorizationOperationsIdentity, PolicyKey: "sample.execute", WorkspaceScope: "authenticated_workspace"},
+		Authorization: Authorization{Strategy: actioncontract.AuthorizationSigned, PolicyKey: "sample.execute", WorkspaceScope: "signed_request_workspace"},
 		Effect:        EffectWrite,
 		Idempotency:   Idempotency{Mode: "caller_key_required", KeySource: "Idempotency-Key"},
 	})

@@ -15,7 +15,7 @@ func permissionAction(key string, bindings ...HTTPBinding) ActionDefinition {
 		CapabilityKey: "orders.management", CapabilityLabel: "Order management",
 		OperationKey: operationKey, OperationLabel: "Read", Label: "Read orders",
 		Exposures:     []Exposure{ExposureTenantAdmin},
-		Authorization: Authorization{Strategy: AuthorizationExactRolePermission},
+		Authorization: Authorization{Strategy: AuthorizationAuthenticated},
 		Permission: &PermissionDefinition{
 			Key: key, Owner: testOwner, ResourceKey: resourceKey, OperationKey: operationKey,
 			Label: "Orders · Read", Category: "Order management", LifecycleStatus: LifecycleActive,

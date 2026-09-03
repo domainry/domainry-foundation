@@ -422,33 +422,20 @@ func validateOperationExtension(value any) error {
 	}
 	authorization := extension.Authorization
 	switch authorization.Strategy {
-	case actioncontract.AuthorizationExactRolePermission:
-		if !keyPattern.MatchString(authorization.Permission) || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("exact permission authorization is invalid")
-		}
-	case actioncontract.AuthorizationAnonymousProtocol:
-		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || authorization.WorkspaceScope != "" {
+	case actioncontract.AuthorizationAnonymous:
+		if authorization.Permission != "" || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 || authorization.WorkspaceScope != "" {
 			return fmt.Errorf("anonymous authorization is invalid")
 		}
-	case actioncontract.AuthorizationDelegatedCredential:
-		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("delegated credential authorization is invalid")
+	case actioncontract.AuthorizationAuthenticated:
+		if len(authorization.Audiences) != 0 || authorization.PolicyKey != "" && authorization.Permission == "" || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("authenticated authorization is invalid")
 		}
-	case actioncontract.AuthorizationAuthenticatedPrincipal:
-		if authorization.Permission != "" || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("principal authorization is invalid")
+		if authorization.Permission != "" && !keyPattern.MatchString(authorization.Permission) {
+			return fmt.Errorf("authenticated permission authorization is invalid")
 		}
-	case actioncontract.AuthorizationSelfOrPermission:
-		if !keyPattern.MatchString(authorization.Permission) || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("self-or-permission authorization is invalid")
-		}
-	case actioncontract.AuthorizationServiceIdentity:
-		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || duplicateOrBlankStrings(authorization.Audiences) || len(authorization.Audiences) == 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("service identity authorization is invalid")
-		}
-	case actioncontract.AuthorizationOperationsIdentity:
-		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 || strings.TrimSpace(authorization.WorkspaceScope) == "" {
-			return fmt.Errorf("operations identity authorization is invalid")
+	case actioncontract.AuthorizationSigned:
+		if authorization.Permission != "" || !keyPattern.MatchString(authorization.PolicyKey) || duplicateOrBlankStrings(authorization.Audiences) || strings.TrimSpace(authorization.WorkspaceScope) == "" {
+			return fmt.Errorf("signed authorization is invalid")
 		}
 	default:
 		return fmt.Errorf("authorization strategy is invalid")

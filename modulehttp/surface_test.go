@@ -48,9 +48,12 @@ func TestValidateSurfaceRejectsIncompleteAuthorityDeclarations(t *testing.T) {
 		want  string
 	}{
 		{name: "no exposure", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) { action.Exposures = nil }), want: "requires an exposure"},
-		{name: "ambient authenticated", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) { action.Permission = nil }), want: "invalid authorization"},
+		{name: "authenticated policy without permission", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) {
+			action.Permission = nil
+			action.Authorization.PolicyKey = "party.self"
+		}), want: "invalid authorization"},
 		{name: "anonymous permission", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) {
-			action.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAnonymousProtocol, PolicyKey: "identity.login"}
+			action.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAnonymous}
 		}), want: "invalid authorization"},
 		{name: "unknown exposure", route: mutateTestRoute(actionTestDefinition(), func(action *actioncontract.ActionDefinition) { action.Exposures = []actioncontract.Exposure{"private"} }), want: "unsupported exposure"},
 	}
@@ -138,14 +141,14 @@ func TestHTTPBindingChangePreservesActionAndPermissionIdentityWithoutAlias(t *te
 func TestRouteFromCanonicalActionSupportsExceptionalStrategy(t *testing.T) {
 	definition := actionTestDefinition()
 	for name, authorization := range map[string]actioncontract.Authorization{
-		"service policy": {Strategy: actioncontract.AuthorizationServiceIdentity, PolicyKey: "party.service.verify", Audiences: []string{"party_service"}},
+		"signed policy": {Strategy: actioncontract.AuthorizationSigned, PolicyKey: "party.service.verify", Audiences: []string{"party_service"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := definition
 			candidate.Authorization = authorization
 			candidate.Permission = nil
 			route, err := RouteFromAction(candidate)
-			if err != nil || route.Action.Authorization.Strategy != actioncontract.AuthorizationServiceIdentity {
+			if err != nil || route.Action.Authorization.Strategy != actioncontract.AuthorizationSigned {
 				t.Fatalf("route=%#v error=%v", route, err)
 			}
 		})
@@ -226,7 +229,7 @@ func actionTestDefinition() actioncontract.ActionDefinition {
 		CapabilityKey: "party.management", CapabilityLabel: "Party management",
 		OperationKey: "read", OperationLabel: "Read", Label: "Get party",
 		Exposures:     []actioncontract.Exposure{actioncontract.ExposureTenantAdmin},
-		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationExactRolePermission},
+		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated},
 		HTTP:          &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/{partyID}", DisplayRouteTemplate: "/party/{partyID}"},
 		Permission: &actioncontract.PermissionDefinition{
 			Key: "party.read", Owner: "party:module", ResourceKey: "party", OperationKey: "read", Label: "Party · Read",
@@ -242,7 +245,7 @@ func principalActionTestDefinition() actioncontract.ActionDefinition {
 	definition.Key, definition.OperationKey, definition.OperationLabel, definition.Label = "party.me.read", "me.read", "Read self", "Get current party"
 	definition.HTTP = &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/me"}
 	definition.Exposures = []actioncontract.Exposure{actioncontract.ExposurePublic, actioncontract.ExposureTenantAdmin}
-	definition.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticatedPrincipal}
+	definition.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated}
 	definition.Permission = nil
 	return definition
 }

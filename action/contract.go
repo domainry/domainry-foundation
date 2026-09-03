@@ -3,22 +3,18 @@ package action
 type AuthorizationStrategy string
 
 const (
-	AuthorizationExactRolePermission    AuthorizationStrategy = "exact_role_permission"
-	AuthorizationAnonymousProtocol      AuthorizationStrategy = "anonymous_protocol"
-	AuthorizationDelegatedCredential    AuthorizationStrategy = "delegated_credential"
-	AuthorizationAuthenticatedPrincipal AuthorizationStrategy = "authenticated_principal"
-	AuthorizationSelfOrPermission       AuthorizationStrategy = "self_or_permission"
-	AuthorizationServiceIdentity        AuthorizationStrategy = "service_identity"
-	AuthorizationOperationsIdentity     AuthorizationStrategy = "operations_identity"
+	AuthorizationAnonymous     AuthorizationStrategy = "anonymous"
+	AuthorizationAuthenticated AuthorizationStrategy = "authenticated"
+	AuthorizationSigned        AuthorizationStrategy = "signed"
 )
 
-// Authorization identifies the one explicit policy shape executed for an
-// Action. ExactRolePermission always checks the Action-owned, same-key
-// Permission. DelegatedCredential identifies a source-handler-verified,
-// workspace-scoped credential rather than an anonymous or bearer principal.
-// PolicyKey names source-owned protocol, credential, self, service or
-// operations policy; Audiences carries exact service-token audiences. None of
-// these fields is a persisted executable pointer.
+// Authorization selects the ingress authentication middleware for an Action.
+// Anonymous accepts a request without a principal, Authenticated requires a
+// resolved login principal, and Signed requires a source-owned request
+// signature or machine credential. Permission remains the independent
+// same-key function grant checked after authentication. PolicyKey identifies a
+// source-owned signed-request verifier or an authenticated domain policy such
+// as self access; Audiences narrows signed machine callers.
 type Authorization struct {
 	Strategy  AuthorizationStrategy `json:"strategy,omitempty"`
 	PolicyKey string                `json:"policy_key,omitempty"`
@@ -98,9 +94,9 @@ type PermissionDefinition struct {
 }
 
 // ActionDefinition is the normalized executable authorization boundary. Each
-// Action has one transport binding identity and at most one same-key
-// Permission. A nil Permission means the Action is governed by an exceptional
-// anonymous, authenticated, service or operations identity policy.
+// Action has one transport binding identity, one of three ingress
+// authentication modes, and at most one same-key Permission. A nil Permission
+// means authentication or a source-owned signed policy is sufficient.
 type ActionDefinition struct {
 	Key                 string                `json:"key"`
 	Owner               string                `json:"owner"`

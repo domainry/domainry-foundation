@@ -90,13 +90,11 @@ func operationExtensionFromHTTPRoute(owner, workspaceScope string, route moduleh
 	if route.Action.Permission != nil {
 		authorization.Permission = route.Action.Permission.Key
 	}
-	if authorization.Strategy != actioncontract.AuthorizationAnonymousProtocol {
+	if authorization.Strategy != actioncontract.AuthorizationAnonymous {
 		authorization.WorkspaceScope = strings.TrimSpace(workspaceScope)
 		if authorization.WorkspaceScope == "" {
-			if authorization.Strategy == actioncontract.AuthorizationDelegatedCredential {
-				authorization.WorkspaceScope = "credential_workspace"
-			} else if authorization.Strategy == actioncontract.AuthorizationServiceIdentity {
-				authorization.WorkspaceScope = "application_workspace"
+			if authorization.Strategy == actioncontract.AuthorizationSigned {
+				authorization.WorkspaceScope = "signed_request_workspace"
 			} else {
 				authorization.WorkspaceScope = "authenticated_workspace_principal"
 			}

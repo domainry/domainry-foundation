@@ -228,33 +228,17 @@ func validateAuthorization(definition ActionDefinition) error {
 	authorization := definition.Authorization
 	hasPermission := definition.Permission != nil
 	switch authorization.Strategy {
-	case AuthorizationExactRolePermission:
-		if !hasPermission || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 {
-			return fmt.Errorf("permission action %q has an invalid authorization declaration", definition.Key)
-		}
-	case AuthorizationAnonymousProtocol:
-		if hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 {
+	case AuthorizationAnonymous:
+		if hasPermission || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 {
 			return fmt.Errorf("anonymous action %q has an invalid authorization declaration", definition.Key)
 		}
-	case AuthorizationDelegatedCredential:
-		if hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 {
-			return fmt.Errorf("delegated credential action %q has an invalid authorization declaration", definition.Key)
+	case AuthorizationAuthenticated:
+		if len(authorization.Audiences) != 0 || authorization.PolicyKey != "" && !hasPermission {
+			return fmt.Errorf("authenticated action %q has an invalid authorization declaration", definition.Key)
 		}
-	case AuthorizationAuthenticatedPrincipal:
-		if hasPermission || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 {
-			return fmt.Errorf("principal-only action %q has an invalid authorization declaration", definition.Key)
-		}
-	case AuthorizationSelfOrPermission:
-		if !hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 {
-			return fmt.Errorf("self-or-permission action %q has an invalid authorization declaration", definition.Key)
-		}
-	case AuthorizationServiceIdentity:
-		if hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || duplicateOrBlank(authorization.Audiences) || len(authorization.Audiences) == 0 {
-			return fmt.Errorf("service identity action %q has an invalid authorization declaration", definition.Key)
-		}
-	case AuthorizationOperationsIdentity:
-		if hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || len(authorization.Audiences) != 0 {
-			return fmt.Errorf("identity-policy action %q has an invalid authorization declaration", definition.Key)
+	case AuthorizationSigned:
+		if hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || duplicateOrBlank(authorization.Audiences) {
+			return fmt.Errorf("signed action %q has an invalid authorization declaration", definition.Key)
 		}
 	default:
 		return fmt.Errorf("action %q has unsupported authorization strategy %q", definition.Key, authorization.Strategy)

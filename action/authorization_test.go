@@ -11,13 +11,12 @@ func TestAuthorizationPoliciesHaveExplicitValidShapes(t *testing.T) {
 		audiences  []string
 		permission bool
 	}{
-		{name: "role permission", strategy: AuthorizationExactRolePermission, permission: true},
-		{name: "anonymous protocol", strategy: AuthorizationAnonymousProtocol, policy: "runtime.api_info"},
-		{name: "delegated credential", strategy: AuthorizationDelegatedCredential, policy: "agent.task_tool_credential"},
-		{name: "authenticated principal", strategy: AuthorizationAuthenticatedPrincipal},
-		{name: "self or permission", strategy: AuthorizationSelfOrPermission, policy: "identity.self", permission: true},
-		{name: "service identity", strategy: AuthorizationServiceIdentity, policy: "scheduler.trigger", audiences: []string{"scheduler_service"}},
-		{name: "operations identity", strategy: AuthorizationOperationsIdentity, policy: "runtime.operations"},
+		{name: "anonymous", strategy: AuthorizationAnonymous},
+		{name: "authenticated principal", strategy: AuthorizationAuthenticated},
+		{name: "authenticated exact permission", strategy: AuthorizationAuthenticated, permission: true},
+		{name: "authenticated self policy", strategy: AuthorizationAuthenticated, policy: "identity.self", permission: true},
+		{name: "signed request", strategy: AuthorizationSigned, policy: "scheduler.trigger"},
+		{name: "signed audience", strategy: AuthorizationSigned, policy: "scheduler.trigger", audiences: []string{"scheduler_service"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -39,28 +38,23 @@ func TestAuthorizationPoliciesRejectMixedOrAmbientAuthority(t *testing.T) {
 		name   string
 		mutate func(*ActionDefinition)
 	}{
-		{name: "missing role permission", mutate: func(value *ActionDefinition) { value.Permission = nil }},
-		{name: "anonymous without policy", mutate: func(value *ActionDefinition) {
-			value.Authorization = Authorization{Strategy: AuthorizationAnonymousProtocol}
+		{name: "anonymous with permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationAnonymous}
+		}},
+		{name: "anonymous with policy", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationAnonymous, PolicyKey: "runtime.public"}
 			value.Permission = nil
 		}},
-		{name: "delegated credential without policy", mutate: func(value *ActionDefinition) {
-			value.Authorization = Authorization{Strategy: AuthorizationDelegatedCredential}
+		{name: "authenticated policy without permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationAuthenticated, PolicyKey: "identity.self"}
 			value.Permission = nil
 		}},
-		{name: "principal with permission", mutate: func(value *ActionDefinition) {
-			value.Authorization = Authorization{Strategy: AuthorizationAuthenticatedPrincipal}
-		}},
-		{name: "self without permission", mutate: func(value *ActionDefinition) {
-			value.Authorization = Authorization{Strategy: AuthorizationSelfOrPermission, PolicyKey: "identity.self"}
+		{name: "signed without policy", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationSigned}
 			value.Permission = nil
 		}},
-		{name: "service with permission", mutate: func(value *ActionDefinition) {
-			value.Authorization = Authorization{Strategy: AuthorizationServiceIdentity, PolicyKey: "scheduler.trigger", Audiences: []string{"scheduler_service"}}
-		}},
-		{name: "service without audience", mutate: func(value *ActionDefinition) {
-			value.Authorization = Authorization{Strategy: AuthorizationServiceIdentity, PolicyKey: "scheduler.trigger"}
-			value.Permission = nil
+		{name: "signed with permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationSigned, PolicyKey: "scheduler.trigger"}
 		}},
 	}
 	for _, test := range tests {
@@ -69,6 +63,28 @@ func TestAuthorizationPoliciesRejectMixedOrAmbientAuthority(t *testing.T) {
 			test.mutate(&definition)
 			if err := validateDefinition(normalizeDefinition(definition)); err == nil {
 				t.Fatal("invalid authorization declaration accepted")
+			}
+		})
+	}
+}
+
+func TestAuthorizationPoliciesRejectRemovedStrategies(t *testing.T) {
+	base := permissionAction("orders.read", HTTPBinding{Method: "GET", RouteTemplate: "/orders"})
+	base.Permission = nil
+	for _, strategy := range []AuthorizationStrategy{
+		"exact_role_permission",
+		"anonymous_protocol",
+		"delegated_credential",
+		"authenticated_principal",
+		"self_or_permission",
+		"service_identity",
+		"operations_identity",
+	} {
+		t.Run(string(strategy), func(t *testing.T) {
+			definition := base
+			definition.Authorization = Authorization{Strategy: strategy, PolicyKey: "legacy.policy"}
+			if err := validateDefinition(normalizeDefinition(definition)); err == nil {
+				t.Fatalf("removed authorization strategy %q was accepted", strategy)
 			}
 		})
 	}
