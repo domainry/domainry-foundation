@@ -14,14 +14,14 @@ import (
 	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
-const ContractVersion = "domainry-module-http-surface-v2"
+const ContractVersion = "domainry-module-http-adapter-v1"
 
 type Exposure = actioncontract.Exposure
 
 const (
-	ExposurePublic      = actioncontract.ExposurePublic
-	ExposureTenantAdmin = actioncontract.ExposureTenantAdmin
-	ExposureOps         = actioncontract.ExposureOps
+	ExposurePublic     = actioncontract.ExposurePublic
+	ExposureManagement = actioncontract.ExposureManagement
+	ExposureOps        = actioncontract.ExposureOps
 )
 
 // Route contains one canonical, source-owned Action declaration. The host
@@ -48,9 +48,9 @@ type AuditRecorder interface {
 	Record(context.Context, AuditEvent) error
 }
 
-// Surface is implemented by a module Binding when that module owns inbound
-// HTTP semantics. SaaS Bindings must not return in-process Surfaces.
-type Surface interface {
+// Adapter is implemented by a module Binding when that module owns inbound
+// HTTP semantics. SaaS Bindings must not return in-process Adapters.
+type Adapter interface {
 	ContractVersion() string
 	Owner() string
 	Name() string
@@ -59,33 +59,33 @@ type Surface interface {
 }
 
 type Provider interface {
-	HTTPSurfaces() []Surface
+	HTTPAdapters() []Adapter
 }
 
 // AuthorizationActions returns the detached Action manifest carried by an
-// HTTP-only module's Surfaces. A module that also owns non-HTTP Actions must
+// HTTP-only module's Adapters. A module that also owns non-HTTP Actions must
 // implement action.Provider and use ValidateAuthorizationProjection to prove
 // that its HTTP routes are exact projections of that complete manifest.
 func AuthorizationActions(provider Provider) ([]actioncontract.ActionDefinition, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("module HTTP provider is required")
 	}
-	return AuthorizationActionsFromSurfaces(provider.HTTPSurfaces())
+	return AuthorizationActionsFromAdapters(provider.HTTPAdapters())
 }
 
-// AuthorizationActionsFromSurfaces is the slice form used after a host has
-// already detached its module Surface inventory.
-func AuthorizationActionsFromSurfaces(surfaces []Surface) ([]actioncontract.ActionDefinition, error) {
+// AuthorizationActionsFromAdapters is the slice form used after a host has
+// already detached its module Adapter inventory.
+func AuthorizationActionsFromAdapters(adapters []Adapter) ([]actioncontract.ActionDefinition, error) {
 	definitions := []actioncontract.ActionDefinition{}
 	seen := map[string]bool{}
-	for _, surface := range surfaces {
-		if err := ValidateSurface(surface); err != nil {
+	for _, adapter := range adapters {
+		if err := ValidateAdapter(adapter); err != nil {
 			return nil, err
 		}
-		for _, route := range surface.Routes() {
+		for _, route := range adapter.Routes() {
 			definition, err := actioncontract.NormalizeDefinition(route.Action)
 			if err != nil {
-				return nil, fmt.Errorf("module HTTP surface %q action: %w", surface.Owner(), err)
+				return nil, fmt.Errorf("module HTTP adapter %q action: %w", adapter.Owner(), err)
 			}
 			if seen[definition.Key] {
 				return nil, fmt.Errorf("module HTTP action %q is mounted more than once", definition.Key)
@@ -98,24 +98,24 @@ func AuthorizationActionsFromSurfaces(surfaces []Surface) ([]actioncontract.Acti
 }
 
 // ValidateSourceOwners enforces the canonical module owner convention without
-// applying it to host-owned Surfaces that happen to use the same transport
+// applying it to host-owned Adapters that happen to use the same transport
 // contract.
 func ValidateSourceOwners(provider Provider) error {
 	if provider == nil {
 		return fmt.Errorf("module HTTP provider is required")
 	}
-	for _, surface := range provider.HTTPSurfaces() {
-		if err := ValidateSurface(surface); err != nil {
+	for _, adapter := range provider.HTTPAdapters() {
+		if err := ValidateAdapter(adapter); err != nil {
 			return err
 		}
-		expectedOwner := "module:" + strings.TrimSpace(surface.Owner())
-		for _, route := range surface.Routes() {
+		expectedOwner := "module:" + strings.TrimSpace(adapter.Owner())
+		for _, route := range adapter.Routes() {
 			definition, err := actioncontract.NormalizeDefinition(route.Action)
 			if err != nil {
-				return fmt.Errorf("module HTTP surface %q action: %w", surface.Owner(), err)
+				return fmt.Errorf("module HTTP adapter %q action: %w", adapter.Owner(), err)
 			}
 			if definition.Owner != expectedOwner {
-				return fmt.Errorf("module HTTP surface %q action %q owner=%q want=%q", surface.Owner(), definition.Key, definition.Owner, expectedOwner)
+				return fmt.Errorf("module HTTP adapter %q action %q owner=%q want=%q", adapter.Owner(), definition.Key, definition.Owner, expectedOwner)
 			}
 		}
 	}
@@ -124,7 +124,7 @@ func ValidateSourceOwners(provider Provider) error {
 
 // ValidateAuthorizationProjection proves that every active HTTP Action in a
 // module's complete source manifest has exactly one byte-for-byte-equivalent
-// normalized Surface route, and that no Surface invents an extra Action. A nil
+// normalized Adapter route, and that no Adapter invents an extra Action. A nil
 // HTTP provider is valid only for a manifest containing no active HTTP Action.
 func ValidateAuthorizationProjection(definitions []actioncontract.ActionDefinition, provider Provider) error {
 	manifest := make(map[string]actioncontract.ActionDefinition, len(definitions))
@@ -158,13 +158,13 @@ func ValidateAuthorizationProjection(definitions []actioncontract.ActionDefiniti
 	}
 	for _, definition := range manifest {
 		if definition.LifecycleStatus != actioncontract.LifecycleRetired && definition.HTTP != nil && !mounted[definition.Key] {
-			return fmt.Errorf("module HTTP action %q has no mounted surface route", definition.Key)
+			return fmt.Errorf("module HTTP action %q has no mounted adapter route", definition.Key)
 		}
 	}
 	return nil
 }
 
-// OpenAPIProvider is implemented by a Surface that owns full OpenAPI
+// OpenAPIProvider is implemented by an Adapter that owns full OpenAPI
 // operations for its declared routes. Keys are exact Route.Pattern values and
 // values are OpenAPI operation objects. The host validates route ownership and
 // merges copies into its process document.
@@ -172,44 +172,72 @@ type OpenAPIProvider interface {
 	OpenAPIOperations() map[string]map[string]any
 }
 
-// ValidateSurface rejects incomplete and ambient-authority declarations before
+// ValidateAdapter rejects incomplete and ambient-authority declarations before
 // the embedding host adds any route to a listener.
-func ValidateSurface(surface Surface) error {
-	if surface == nil || surface.Handler() == nil {
-		return fmt.Errorf("module HTTP surface is incomplete")
+func ValidateAdapter(adapter Adapter) error {
+	if adapter == nil || adapter.Handler() == nil {
+		return fmt.Errorf("module HTTP adapter is incomplete")
 	}
-	if surface.ContractVersion() != ContractVersion {
-		return fmt.Errorf("module HTTP surface contract is invalid")
+	if adapter.ContractVersion() != ContractVersion {
+		return fmt.Errorf("module HTTP adapter contract is invalid")
 	}
-	owner, name := strings.TrimSpace(surface.Owner()), strings.TrimSpace(surface.Name())
+	owner, name := strings.TrimSpace(adapter.Owner()), strings.TrimSpace(adapter.Name())
 	if owner == "" || name == "" {
-		return fmt.Errorf("module HTTP surface owner and name are required")
+		return fmt.Errorf("module HTTP adapter owner and name are required")
 	}
-	if len(surface.Routes()) == 0 {
-		return fmt.Errorf("module HTTP surface %q/%q has no routes", owner, name)
+	if len(adapter.Routes()) == 0 {
+		return fmt.Errorf("module HTTP adapter %q/%q has no routes", owner, name)
 	}
 	seen := map[string]bool{}
-	for _, route := range surface.Routes() {
+	for _, route := range adapter.Routes() {
 		if err := ValidateRoute(route); err != nil {
-			return fmt.Errorf("module HTTP surface %q/%q: %w", owner, name, err)
+			return fmt.Errorf("module HTTP adapter %q/%q: %w", owner, name, err)
+		}
+		if err := ValidateRouteNamespace(owner, route); err != nil {
+			return fmt.Errorf("module HTTP adapter %q/%q: %w", owner, name, err)
 		}
 		pattern := route.Pattern()
 		if seen[pattern] {
-			return fmt.Errorf("module HTTP surface %q/%q declares route %q more than once", owner, name, pattern)
+			return fmt.Errorf("module HTTP adapter %q/%q declares route %q more than once", owner, name, pattern)
 		}
 		seen[pattern] = true
 	}
-	if provider, ok := surface.(OpenAPIProvider); ok {
+	if provider, ok := adapter.(OpenAPIProvider); ok {
 		for pattern, operation := range provider.OpenAPIOperations() {
 			if !seen[strings.TrimSpace(pattern)] {
-				return fmt.Errorf("module HTTP surface %q/%q publishes OpenAPI for undeclared route %q", owner, name, pattern)
+				return fmt.Errorf("module HTTP adapter %q/%q publishes OpenAPI for undeclared route %q", owner, name, pattern)
 			}
 			if len(operation) == 0 || strings.TrimSpace(stringValue(operation["operationId"])) == "" {
-				return fmt.Errorf("module HTTP surface %q/%q route %q has incomplete OpenAPI", owner, name, pattern)
+				return fmt.Errorf("module HTTP adapter %q/%q route %q has incomplete OpenAPI", owner, name, pattern)
 			}
 		}
 	}
 	return nil
+}
+
+// ValidateRouteNamespace keeps deployment audiences out of module URLs. A
+// module owns one stable root derived from its owner key; listener exposure is
+// declared by Action.Exposures and authorization by Action.Permission.
+// Identity's authentication and standards-based discovery endpoints are the
+// only deliberate exceptions to the module-root convention.
+func ValidateRouteNamespace(owner string, route Route) error {
+	owner = strings.TrimSpace(owner)
+	if owner == "" {
+		return fmt.Errorf("module HTTP route owner is required")
+	}
+	definition, err := actioncontract.NormalizeDefinition(route.Action)
+	if err != nil {
+		return fmt.Errorf("module HTTP route action: %w", err)
+	}
+	path := strings.TrimSpace(definition.HTTP.RouteTemplate)
+	root := "/" + strings.ReplaceAll(owner, "_", "-")
+	if path == root || strings.HasPrefix(path, root+"/") {
+		return nil
+	}
+	if owner == "identity" && (path == "/auth" || strings.HasPrefix(path, "/auth/") || strings.HasPrefix(path, "/.well-known/")) {
+		return nil
+	}
+	return fmt.Errorf("route %q must be rooted at %q; listener exposure and product UI do not belong in module paths", route.Pattern(), root)
 }
 
 func ValidateRoute(route Route) error {

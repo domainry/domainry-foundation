@@ -8,7 +8,7 @@ import (
 	actioncontract "github.com/domainry/domainry-foundation/action"
 )
 
-type testSurface struct {
+type testAdapter struct {
 	contract string
 	owner    string
 	name     string
@@ -16,32 +16,32 @@ type testSurface struct {
 	handler  http.Handler
 }
 
-type testProvider struct{ surfaces []Surface }
+type testProvider struct{ adapters []Adapter }
 
-func (provider testProvider) HTTPSurfaces() []Surface {
-	return append([]Surface(nil), provider.surfaces...)
+func (provider testProvider) HTTPAdapters() []Adapter {
+	return append([]Adapter(nil), provider.adapters...)
 }
 
-func (surface testSurface) ContractVersion() string { return surface.contract }
-func (surface testSurface) Owner() string           { return surface.owner }
-func (surface testSurface) Name() string            { return surface.name }
-func (surface testSurface) Routes() []Route         { return surface.routes }
-func (surface testSurface) Handler() http.Handler   { return surface.handler }
+func (adapter testAdapter) ContractVersion() string { return adapter.contract }
+func (adapter testAdapter) Owner() string           { return adapter.owner }
+func (adapter testAdapter) Name() string            { return adapter.name }
+func (adapter testAdapter) Routes() []Route         { return adapter.routes }
+func (adapter testAdapter) Handler() http.Handler   { return adapter.handler }
 
-func TestValidateSurfaceAcceptsHostEnforcedModuleRoutes(t *testing.T) {
-	surface := testSurface{
+func TestValidateAdapterAcceptsHostEnforcedModuleRoutes(t *testing.T) {
+	adapter := testAdapter{
 		contract: ContractVersion, owner: "party", name: "party_management", handler: http.NotFoundHandler(),
 		routes: []Route{
 			mustTestRoute(t, actionTestDefinition()),
 			mustTestRoute(t, principalActionTestDefinition()),
 		},
 	}
-	if err := ValidateSurface(surface); err != nil {
-		t.Fatalf("validate surface: %v", err)
+	if err := ValidateAdapter(adapter); err != nil {
+		t.Fatalf("validate adapter: %v", err)
 	}
 }
 
-func TestValidateSurfaceRejectsIncompleteAuthorityDeclarations(t *testing.T) {
+func TestValidateAdapterRejectsIncompleteAuthorityDeclarations(t *testing.T) {
 	tests := []struct {
 		name  string
 		route Route
@@ -59,8 +59,8 @@ func TestValidateSurfaceRejectsIncompleteAuthorityDeclarations(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			surface := testSurface{contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(), routes: []Route{test.route}}
-			err := ValidateSurface(surface)
+			adapter := testAdapter{contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(), routes: []Route{test.route}}
+			err := ValidateAdapter(adapter)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("error=%v, want fragment %q", err, test.want)
 			}
@@ -68,10 +68,10 @@ func TestValidateSurfaceRejectsIncompleteAuthorityDeclarations(t *testing.T) {
 	}
 }
 
-func TestValidateSurfaceRejectsDuplicateRoutes(t *testing.T) {
+func TestValidateAdapterRejectsDuplicateRoutes(t *testing.T) {
 	route := mustTestRoute(t, actionTestDefinition())
-	surface := testSurface{contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(), routes: []Route{route, route}}
-	if err := ValidateSurface(surface); err == nil || !strings.Contains(err.Error(), "more than once") {
+	adapter := testAdapter{contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(), routes: []Route{route, route}}
+	if err := ValidateAdapter(adapter); err == nil || !strings.Contains(err.Error(), "more than once") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -79,15 +79,15 @@ func TestValidateSurfaceRejectsDuplicateRoutes(t *testing.T) {
 func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
 	action := principalActionTestDefinition()
 	action.Key, action.OperationKey, action.OperationLabel, action.Label = "reports.snapshots.refresh", "refresh", "Refresh", "Refresh report snapshot"
-	action.HTTP = &actioncontract.HTTPBinding{Method: "POST", RouteTemplate: "/reports/{reportKey}/snapshots/refresh"}
+	action.HTTP = &actioncontract.HTTPBinding{Method: "POST", RouteTemplate: "/report/{reportKey}/snapshots/refresh"}
 	action.EffectClass, action.RiskLevel = actioncontract.EffectWrite, actioncontract.RiskMedium
 	action.IdempotencyDecision, action.AuditClass = "caller_key_required", "mutation_audit_required"
 	route := mustTestRoute(t, action)
-	surface := governedTestSurface{testSurface: testSurface{contract: ContractVersion, owner: "report", name: "reports", handler: http.NotFoundHandler(), routes: []Route{route}}, operations: map[string]map[string]any{
+	adapter := governedTestAdapter{testAdapter: testAdapter{contract: ContractVersion, owner: "report", name: "reports", handler: http.NotFoundHandler(), routes: []Route{route}}, operations: map[string]map[string]any{
 		route.Pattern(): {"operationId": "refreshReportSnapshot"},
 	}}
-	if err := ValidateSurface(surface); err != nil {
-		t.Fatalf("validate governed surface: %v", err)
+	if err := ValidateAdapter(adapter); err != nil {
+		t.Fatalf("validate governed adapter: %v", err)
 	}
 
 	invalid := route
@@ -96,8 +96,8 @@ func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
 		t.Fatalf("unexpected governance error: %v", err)
 	}
 
-	surface.operations = map[string]map[string]any{"GET /unknown": {"operationId": "unknown"}}
-	if err := ValidateSurface(surface); err == nil || !strings.Contains(err.Error(), "undeclared route") {
+	adapter.operations = map[string]map[string]any{"GET /unknown": {"operationId": "unknown"}}
+	if err := ValidateAdapter(adapter); err == nil || !strings.Contains(err.Error(), "undeclared route") {
 		t.Fatalf("unexpected OpenAPI ownership error: %v", err)
 	}
 }
@@ -166,7 +166,7 @@ func TestAuthorizationActionsUsesHTTPRoutesAsTheHTTPOnlyManifest(t *testing.T) {
 	definition := actionTestDefinition()
 	definition.Owner = "module:party"
 	definition.Permission.Owner = "module:party"
-	provider := testProvider{surfaces: []Surface{testSurface{
+	provider := testProvider{adapters: []Adapter{testAdapter{
 		contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(),
 		routes: []Route{mustTestRoute(t, definition)},
 	}}}
@@ -186,7 +186,7 @@ func TestAuthorizationActionsUsesHTTPRoutesAsTheHTTPOnlyManifest(t *testing.T) {
 
 func TestValidateSourceOwnersRejectsHostOrModuleOwnerDrift(t *testing.T) {
 	definition := actionTestDefinition()
-	provider := testProvider{surfaces: []Surface{testSurface{
+	provider := testProvider{adapters: []Adapter{testAdapter{
 		contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(),
 		routes: []Route{mustTestRoute(t, definition)},
 	}}}
@@ -195,7 +195,7 @@ func TestValidateSourceOwnersRejectsHostOrModuleOwnerDrift(t *testing.T) {
 	}
 }
 
-func TestValidateAuthorizationProjectionAcceptsNonHTTPAndRejectsSurfaceDrift(t *testing.T) {
+func TestValidateAuthorizationProjectionAcceptsNonHTTPAndRejectsAdapterDrift(t *testing.T) {
 	httpAction := actionTestDefinition()
 	httpAction.Owner = "module:party"
 	httpAction.Permission.Owner = "module:party"
@@ -205,7 +205,7 @@ func TestValidateAuthorizationProjectionAcceptsNonHTTPAndRejectsSurfaceDrift(t *
 	nonHTTP.OperationKey, nonHTTP.OperationLabel, nonHTTP.Label = "run", "Run", "Run party job"
 	nonHTTP.HTTP = nil
 	nonHTTP.NonHTTP = []actioncontract.NonHTTPBinding{{Kind: "job", InvocationKey: "party.jobs.run"}}
-	provider := testProvider{surfaces: []Surface{testSurface{
+	provider := testProvider{adapters: []Adapter{testAdapter{
 		contract: ContractVersion, owner: "party", name: "party", handler: http.NotFoundHandler(),
 		routes: []Route{mustTestRoute(t, httpAction)},
 	}}}
@@ -218,17 +218,17 @@ func TestValidateAuthorizationProjectionAcceptsNonHTTPAndRejectsSurfaceDrift(t *
 	if err := ValidateAuthorizationProjection([]actioncontract.ActionDefinition{drifted, nonHTTP}, provider); err == nil || !strings.Contains(err.Error(), "differs from its source manifest") {
 		t.Fatalf("drift error=%v", err)
 	}
-	if err := ValidateAuthorizationProjection([]actioncontract.ActionDefinition{httpAction}, nil); err == nil || !strings.Contains(err.Error(), "no mounted surface route") {
-		t.Fatalf("missing surface error=%v", err)
+	if err := ValidateAuthorizationProjection([]actioncontract.ActionDefinition{httpAction}, nil); err == nil || !strings.Contains(err.Error(), "no mounted adapter route") {
+		t.Fatalf("missing adapter error=%v", err)
 	}
 }
 
 func actionTestDefinition() actioncontract.ActionDefinition {
 	return actioncontract.ActionDefinition{
-		Key: "party.read", Owner: "party:module", SourceKind: "module_surface",
+		Key: "party.read", Owner: "party:module", SourceKind: "module_adapter",
 		CapabilityKey: "party.management", CapabilityLabel: "Party management",
 		OperationKey: "read", OperationLabel: "Read", Label: "Get party",
-		Exposures:     []actioncontract.Exposure{actioncontract.ExposureTenantAdmin},
+		Exposures:     []actioncontract.Exposure{actioncontract.ExposureManagement},
 		Authorization: actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated},
 		HTTP:          &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/{partyID}", DisplayRouteTemplate: "/party/{partyID}"},
 		Permission: &actioncontract.PermissionDefinition{
@@ -244,7 +244,7 @@ func principalActionTestDefinition() actioncontract.ActionDefinition {
 	definition := actionTestDefinition()
 	definition.Key, definition.OperationKey, definition.OperationLabel, definition.Label = "party.me.read", "me.read", "Read self", "Get current party"
 	definition.HTTP = &actioncontract.HTTPBinding{Method: "GET", RouteTemplate: "/party/me"}
-	definition.Exposures = []actioncontract.Exposure{actioncontract.ExposurePublic, actioncontract.ExposureTenantAdmin}
+	definition.Exposures = []actioncontract.Exposure{actioncontract.ExposurePublic, actioncontract.ExposureManagement}
 	definition.Authorization = actioncontract.Authorization{Strategy: actioncontract.AuthorizationAuthenticated}
 	definition.Permission = nil
 	return definition
@@ -264,14 +264,14 @@ func mutateTestRoute(definition actioncontract.ActionDefinition, mutate func(*ac
 	return Route{Action: definition}
 }
 
-type governedTestSurface struct {
-	testSurface
+type governedTestAdapter struct {
+	testAdapter
 	operations map[string]map[string]any
 }
 
-func (surface governedTestSurface) OpenAPIOperations() map[string]map[string]any {
-	return surface.operations
+func (adapter governedTestAdapter) OpenAPIOperations() map[string]map[string]any {
+	return adapter.operations
 }
 
-var _ Surface = testSurface{}
-var _ OpenAPIProvider = governedTestSurface{}
+var _ Adapter = testAdapter{}
+var _ OpenAPIProvider = governedTestAdapter{}

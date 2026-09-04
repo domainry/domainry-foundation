@@ -14,7 +14,7 @@ lifecycle.
 - Current deployment mode is deliberately not disclosed. Supported deployment
   modes are part of the source contract and therefore do not change when the
   selected topology changes.
-- Mounted `modulehttp.Surface` routes, SaaS health/discovery endpoints, service
+- Mounted `modulehttp.Adapter` routes, SaaS health/discovery endpoints, service
   authentication, workers, persistence, and operations routes are deployment
   evidence and never enter this model-facing contract automatically.
 
@@ -72,14 +72,14 @@ model-facing and must not be disclosed here.
 A category is rejected above 20 operations, 50 source projections, 50
 validation scopes, or 1 MiB of canonical JSON. Required collection fields
 always encode as JSON arrays, including empty `[]`; they never alternate with
-`null`. Owners split larger surfaces by stable business semantics (or
+`null`. Owners split larger adapters by stable business semantics (or
 stable projection batches for large registries); they never truncate a category
 or omit an operation/projection from the selected batch. Every projection is
 included in the module contract digest.
 
 ## Canonical HTTP mapping
 
-The only shared capability wire surface is:
+The only shared capability wire adapter is:
 
 - `GET /.well-known/domainry/module-capability/v1/summary`
 - `GET /.well-known/domainry/module-capability/v1/categories/{key}`

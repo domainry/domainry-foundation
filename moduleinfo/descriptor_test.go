@@ -10,7 +10,7 @@ func TestInventorySortsAndRejectsSaaSHTTP(t *testing.T) {
 	if err != nil || value.Modules[0].Key != "identity" {
 		t.Fatalf("inventory=%+v err=%v", value, err)
 	}
-	_, err = NewInventory([]Descriptor{{Key: "identity", Mode: DeploymentModeSaaS, Capabilities: []string{"authentication"}, HTTPSurfaces: []HTTPSurface{{Name: "invalid"}}, Persistence: Persistence{Mode: PersistenceServiceOwned, SchemaOwner: "identity"}}})
+	_, err = NewInventory([]Descriptor{{Key: "identity", Mode: DeploymentModeSaaS, Capabilities: []string{"authentication"}, HTTPAdapters: []HTTPAdapter{{Name: "invalid"}}, Persistence: Persistence{Mode: PersistenceServiceOwned, SchemaOwner: "identity"}}})
 	if err == nil {
 		t.Fatal("SaaS in-process HTTP was accepted")
 	}

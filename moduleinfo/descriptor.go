@@ -17,7 +17,7 @@ const (
 	DeploymentModeSaaS   DeploymentMode = "saas"
 )
 
-type HTTPSurface struct {
+type HTTPAdapter struct {
 	Name   string   `json:"name"`
 	Routes []string `json:"routes"`
 }
@@ -39,7 +39,7 @@ type Descriptor struct {
 	Key          string         `json:"key"`
 	Mode         DeploymentMode `json:"mode"`
 	Capabilities []string       `json:"capabilities"`
-	HTTPSurfaces []HTTPSurface  `json:"http_surfaces,omitempty"`
+	HTTPAdapters []HTTPAdapter  `json:"http_adapters,omitempty"`
 	Persistence  Persistence    `json:"persistence"`
 }
 
@@ -79,7 +79,7 @@ func ValidateDescriptor(value Descriptor) error {
 		}
 		seen[capability] = true
 	}
-	if value.Mode == DeploymentModeSaaS && len(value.HTTPSurfaces) != 0 {
+	if value.Mode == DeploymentModeSaaS && len(value.HTTPAdapters) != 0 {
 		return fmt.Errorf("SaaS module %q exposes in-process HTTP", value.Key)
 	}
 	switch value.Persistence.Mode {

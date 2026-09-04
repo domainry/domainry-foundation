@@ -16,7 +16,7 @@ Workflow, or other product-domain behavior.
 - `idempotency`: fingerprints, receipt decisions, audit-safe facts, and bounded metrics.
 - `logging`: structured Zap logging with stable error and request fields.
 - `mutation`: storage mutation conflicts, transient failures, and transaction metrics.
-- `modulehttp`: deployment-neutral, host-enforced HTTP Surface declarations for in-process modules.
+- `modulehttp`: deployment-neutral, host-enforced HTTP Adapter declarations for in-process modules.
 - `moduleinfo`: normalized active-module capabilities, deployment topology, HTTP, and persistence ownership.
 - `requestcontext`: request, correlation, workspace, actor, execution, and trace identity.
 - `ratelimit`: storage-neutral decisions and a bounded process-local limiter.

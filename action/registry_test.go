@@ -11,10 +11,10 @@ func permissionAction(key string, bindings ...HTTPBinding) ActionDefinition {
 	separator := strings.LastIndex(key, ".")
 	resourceKey, operationKey := key[:separator], key[separator+1:]
 	definition := ActionDefinition{
-		Key: key, Owner: testOwner, SourceKind: "builtin_surface",
+		Key: key, Owner: testOwner, SourceKind: "builtin_http",
 		CapabilityKey: "orders.management", CapabilityLabel: "Order management",
 		OperationKey: operationKey, OperationLabel: "Read", Label: "Read orders",
-		Exposures:     []Exposure{ExposureTenantAdmin},
+		Exposures:     []Exposure{ExposureManagement},
 		Authorization: Authorization{Strategy: AuthorizationAuthenticated},
 		Permission: &PermissionDefinition{
 			Key: key, Owner: testOwner, ResourceKey: resourceKey, OperationKey: operationKey,

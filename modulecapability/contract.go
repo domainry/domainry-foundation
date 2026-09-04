@@ -109,7 +109,7 @@ type CategoryDocument struct {
 }
 
 // ValidationScopeContract makes a category's model-authoring validation
-// surface discoverable without teaching Plane a module-specific payload
+// adapter discoverable without teaching Plane a module-specific payload
 // shape. The owner still performs every semantic check.
 type ValidationScopeContract struct {
 	Kind                  string             `json:"kind"`

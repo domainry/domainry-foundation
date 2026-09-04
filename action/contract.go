@@ -24,9 +24,9 @@ type Authorization struct {
 type Exposure string
 
 const (
-	ExposurePublic      Exposure = "public"
-	ExposureTenantAdmin Exposure = "tenant_admin"
-	ExposureOps         Exposure = "ops"
+	ExposurePublic     Exposure = "public"
+	ExposureManagement Exposure = "management"
+	ExposureOps        Exposure = "ops"
 )
 
 type EffectClass string

@@ -132,7 +132,7 @@ func validateDefinition(definition ActionDefinition) error {
 	seenExposures := map[Exposure]bool{}
 	for _, exposure := range definition.Exposures {
 		switch exposure {
-		case ExposurePublic, ExposureTenantAdmin, ExposureOps:
+		case ExposurePublic, ExposureManagement, ExposureOps:
 		default:
 			return fmt.Errorf("action %q has unsupported exposure %q", definition.Key, exposure)
 		}
