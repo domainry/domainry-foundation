@@ -69,13 +69,11 @@ func ValidateModuleSummary(summary ModuleSummary) error {
 	if strings.TrimSpace(summary.Name) == "" || strings.TrimSpace(summary.Description) == "" {
 		return fmt.Errorf("module %q capability name and description are required", identity.Key)
 	}
-	if summary.Scenarios.UseWhen == nil || summary.Scenarios.DoNotUseWhen == nil || summary.Scenarios.RequirementSignals == nil ||
-		summary.Scenarios.ProvidedCapabilities == nil || summary.Scenarios.RequiredModules == nil || summary.Scenarios.OptionalModules == nil ||
-		summary.Scenarios.ConflictingModules == nil || summary.Scenarios.AssemblyChains == nil || summary.Scenarios.ValidationScopes == nil ||
-		summary.Scenarios.SelectionExamples == nil || summary.Scenarios.RejectionExamples == nil || summary.Categories == nil {
+	if summary.Composition.ProvidedCapabilities == nil || summary.Composition.RequiredModules == nil || summary.Composition.OptionalModules == nil ||
+		summary.Composition.ConflictingModules == nil || summary.Composition.AssemblyChains == nil || summary.Composition.ValidationScopes == nil || summary.Categories == nil {
 		return fmt.Errorf("module %q capability required collections must be JSON arrays", identity.Key)
 	}
-	if err := validateScenarios(identity.Key, summary.Scenarios); err != nil {
+	if err := validateComposition(identity.Key, summary.Composition); err != nil {
 		return err
 	}
 	if len(summary.Categories) == 0 {
@@ -257,55 +255,48 @@ func ValidateValidationResult(result ValidationResult, identity ModuleIdentity, 
 	return nil
 }
 
-func validateScenarios(moduleKey string, scenarios AdaptationScenarios) error {
+func validateComposition(moduleKey string, composition ModuleComposition) error {
 	required := []struct {
 		name   string
 		values []string
 	}{
-		{"use_when", scenarios.UseWhen}, {"do_not_use_when", scenarios.DoNotUseWhen},
-		{"requirement_signals", scenarios.RequirementSignals}, {"provided_capabilities", scenarios.ProvidedCapabilities},
-		{"assembly_chains", scenarios.AssemblyChains},
+		{"provided_capabilities", composition.ProvidedCapabilities},
+		{"assembly_chains", composition.AssemblyChains},
 	}
 	for _, field := range required {
 		if err := validateUniqueNonBlank(field.name, field.values, true); err != nil {
-			return fmt.Errorf("module %q scenarios: %w", moduleKey, err)
+			return fmt.Errorf("module %q composition: %w", moduleKey, err)
 		}
 	}
 	// Every module Binding exposes ValidateCapabilityCandidate so Plane and the
 	// CLI have one stable SDK shape. A module that owns no authorable candidate
 	// parameters must disclose no scopes instead of inventing a validation
 	// model; StaticBinding then rejects every attempted kind as out of scope.
-	if err := validateUniqueNonBlank("validation_scopes", scenarios.ValidationScopes, false); err != nil {
-		return fmt.Errorf("module %q scenarios: %w", moduleKey, err)
+	if err := validateUniqueNonBlank("validation_scopes", composition.ValidationScopes, false); err != nil {
+		return fmt.Errorf("module %q composition: %w", moduleKey, err)
 	}
 	for _, field := range []struct {
 		name   string
 		values []string
-	}{{"required_modules", scenarios.RequiredModules}, {"optional_modules", scenarios.OptionalModules}, {"conflicting_modules", scenarios.ConflictingModules}} {
+	}{{"required_modules", composition.RequiredModules}, {"optional_modules", composition.OptionalModules}, {"conflicting_modules", composition.ConflictingModules}} {
 		if err := validateModuleKeys(moduleKey, field.name, field.values); err != nil {
 			return err
 		}
 	}
 	groups := map[string]string{}
-	for _, value := range scenarios.RequiredModules {
+	for _, value := range composition.RequiredModules {
 		groups[value] = "required_modules"
 	}
 	for _, field := range []struct {
 		name   string
 		values []string
-	}{{"optional_modules", scenarios.OptionalModules}, {"conflicting_modules", scenarios.ConflictingModules}} {
+	}{{"optional_modules", composition.OptionalModules}, {"conflicting_modules", composition.ConflictingModules}} {
 		for _, value := range field.values {
 			if previous := groups[value]; previous != "" {
-				return fmt.Errorf("module %q scenarios place %q in both %s and %s", moduleKey, value, previous, field.name)
+				return fmt.Errorf("module %q composition places %q in both %s and %s", moduleKey, value, previous, field.name)
 			}
 			groups[value] = field.name
 		}
-	}
-	if err := validateExamples("selection_examples", scenarios.SelectionExamples); err != nil {
-		return fmt.Errorf("module %q scenarios: %w", moduleKey, err)
-	}
-	if err := validateExamples("rejection_examples", scenarios.RejectionExamples); err != nil {
-		return fmt.Errorf("module %q scenarios: %w", moduleKey, err)
 	}
 	return nil
 }
@@ -586,24 +577,9 @@ func validateModuleKeys(moduleKey, name string, values []string) error {
 	seen := map[string]bool{}
 	for _, value := range values {
 		if !keyPattern.MatchString(value) || value == moduleKey || seen[value] {
-			return fmt.Errorf("module %q scenarios contain invalid %s", moduleKey, name)
+			return fmt.Errorf("module %q composition contains invalid %s", moduleKey, name)
 		}
 		seen[value] = true
-	}
-	return nil
-}
-
-func validateExamples(name string, values []ScenarioExample) error {
-	if len(values) == 0 {
-		return fmt.Errorf("%s are required", name)
-	}
-	seen := map[string]bool{}
-	for _, value := range values {
-		key := strings.TrimSpace(value.Requirement)
-		if key == "" || strings.TrimSpace(value.Reason) == "" || seen[key] {
-			return fmt.Errorf("%s contain an incomplete or duplicate example", name)
-		}
-		seen[key] = true
 	}
 	return nil
 }

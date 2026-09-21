@@ -158,10 +158,10 @@ func TestStaticBindingRejectsOversizedValidationIndex(t *testing.T) {
 
 func TestStaticBindingNormalizesRequiredEmptyCollectionsToJSONArrays(t *testing.T) {
 	summary, categories := testContract(t)
-	summary.Scenarios.RequiredModules = nil
-	summary.Scenarios.OptionalModules = nil
-	summary.Scenarios.ConflictingModules = nil
-	summary.Scenarios.ValidationScopes = nil
+	summary.Composition.RequiredModules = nil
+	summary.Composition.OptionalModules = nil
+	summary.Composition.ConflictingModules = nil
+	summary.Composition.ValidationScopes = nil
 	categories[0].Category.ValidationScopes = nil
 	categories[0].ValidationContracts = nil
 	binding, err := NewStaticBinding(summary, categories, nil)
@@ -181,6 +181,14 @@ func TestStaticBindingNormalizesRequiredEmptyCollectionsToJSONArrays(t *testing.
 			t.Fatalf("normalized summary lacks %s: %s", field, payload)
 		}
 	}
+	for _, obsolete := range []string{`"scenarios"`, `"use_when"`, `"do_not_use_when"`, `"requirement_signals"`, `"selection_examples"`, `"rejection_examples"`} {
+		if strings.Contains(string(payload), obsolete) {
+			t.Fatalf("machine summary contains obsolete human guidance %s: %s", obsolete, payload)
+		}
+	}
+	if !strings.Contains(string(payload), `"composition"`) {
+		t.Fatalf("normalized summary lacks composition: %s", payload)
+	}
 }
 
 func TestWireValidatorsRejectNullRequiredCollections(t *testing.T) {
@@ -188,7 +196,7 @@ func TestWireValidatorsRejectNullRequiredCollections(t *testing.T) {
 	summary.Identity.ContractVersion = ContractVersion
 	summary.Identity.ValidationContractVersion = ValidationContractVersion
 	summary.Identity.ContractSHA256 = strings.Repeat("a", 64)
-	summary.Scenarios.ValidationScopes = nil
+	summary.Composition.ValidationScopes = nil
 	if err := ValidateModuleSummary(summary); err == nil || !strings.Contains(err.Error(), "JSON arrays") {
 		t.Fatalf("ValidateModuleSummary() error = %v", err)
 	}
@@ -196,6 +204,20 @@ func TestWireValidatorsRejectNullRequiredCollections(t *testing.T) {
 	result := ValidationResult{ContractVersion: ValidationContractVersion, ModuleKey: identity.Key, CategoryKey: "sample.execute", ContractSHA256: identity.ContractSHA256}
 	if err := ValidateValidationResult(result, identity, "sample.execute"); err == nil || !strings.Contains(err.Error(), "JSON array") {
 		t.Fatalf("ValidateValidationResult() error = %v", err)
+	}
+}
+
+func TestSummaryDecoderRejectsLegacyScenarioAndHumanGuidanceFields(t *testing.T) {
+	for name, payload := range map[string]string{
+		"legacy scenarios envelope":     `{"scenarios":{"provided_capabilities":[]}}`,
+		"human guidance in composition": `{"composition":{"provided_capabilities":[],"use_when":[]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var summary ModuleSummary
+			if err := decodeStrict([]byte(payload), &summary); err == nil {
+				t.Fatalf("legacy or human guidance field was accepted: %s", payload)
+			}
+		})
 	}
 }
 
@@ -233,7 +255,7 @@ func TestStaticBindingAllowsConfigurationOnlyCategory(t *testing.T) {
 
 func TestStaticBindingAllowsModuleWithoutAuthorableCandidates(t *testing.T) {
 	summary, categories := testContract(t)
-	summary.Scenarios.ValidationScopes = []string{}
+	summary.Composition.ValidationScopes = []string{}
 	categories[0].Category.ValidationScopes = []string{}
 	categories[0].ValidationContracts = nil
 	binding, err := NewStaticBinding(summary, categories, nil)
@@ -316,10 +338,8 @@ func testContract(t *testing.T) (ModuleSummary, []CategoryDocument) {
 	return ModuleSummary{
 			Identity: ModuleIdentity{Key: "sample", SourceOwner: "sample", ModuleVersion: "v1.0.0", ValidationRevision: "sample-validation-v1", SupportedDeploymentModes: []DeploymentMode{DeploymentModeModule, DeploymentModeSaaS}},
 			Name:     "Sample", Description: "Sample module",
-			Scenarios: AdaptationScenarios{
-				UseWhen: []string{"A product must execute a sample operation"}, DoNotUseWhen: []string{"A product only stores unrelated records"},
-				RequirementSignals: []string{"sample execution"}, ProvidedCapabilities: []string{"sample.execute"}, AssemblyChains: []string{"sample"}, ValidationScopes: []string{"configuration"},
-				SelectionExamples: []ScenarioExample{{Requirement: "Execute the sample", Reason: "Sample owns execution"}}, RejectionExamples: []ScenarioExample{{Requirement: "List records", Reason: "Records owns listing"}},
+			Composition: ModuleComposition{
+				ProvidedCapabilities: []string{"sample.execute"}, AssemblyChains: []string{"sample"}, ValidationScopes: []string{"configuration"},
 			},
 		}, []CategoryDocument{{
 			Category:            category,

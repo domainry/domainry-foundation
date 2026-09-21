@@ -58,31 +58,24 @@ type ModuleIdentity struct {
 	SupportedDeploymentModes  []DeploymentMode `json:"supported_deployment_modes"`
 }
 
-type AdaptationScenarios struct {
-	UseWhen              []string          `json:"use_when"`
-	DoNotUseWhen         []string          `json:"do_not_use_when"`
-	RequirementSignals   []string          `json:"requirement_signals"`
-	ProvidedCapabilities []string          `json:"provided_capabilities"`
-	RequiredModules      []string          `json:"required_modules"`
-	OptionalModules      []string          `json:"optional_modules"`
-	ConflictingModules   []string          `json:"conflicting_modules"`
-	AssemblyChains       []string          `json:"assembly_chains"`
-	ValidationScopes     []string          `json:"validation_scopes"`
-	SelectionExamples    []ScenarioExample `json:"selection_examples"`
-	RejectionExamples    []ScenarioExample `json:"rejection_examples"`
-}
-
-type ScenarioExample struct {
-	Requirement string `json:"requirement"`
-	Reason      string `json:"reason"`
+// ModuleComposition contains only machine assembly facts. Human and Agent
+// selection guidance is owned by capability/agent/index.json and its Markdown
+// guides so the module contract does not become a second scenario authority.
+type ModuleComposition struct {
+	ProvidedCapabilities []string `json:"provided_capabilities"`
+	RequiredModules      []string `json:"required_modules"`
+	OptionalModules      []string `json:"optional_modules"`
+	ConflictingModules   []string `json:"conflicting_modules"`
+	AssemblyChains       []string `json:"assembly_chains"`
+	ValidationScopes     []string `json:"validation_scopes"`
 }
 
 type ModuleSummary struct {
-	Identity    ModuleIdentity      `json:"identity"`
-	Name        string              `json:"name"`
-	Description string              `json:"description"`
-	Scenarios   AdaptationScenarios `json:"scenarios"`
-	Categories  []CategorySummary   `json:"categories"`
+	Identity    ModuleIdentity    `json:"identity"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Composition ModuleComposition `json:"composition"`
+	Categories  []CategorySummary `json:"categories"`
 }
 
 type CategorySummary struct {

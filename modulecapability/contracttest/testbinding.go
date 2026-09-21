@@ -27,10 +27,9 @@ func NewFixtureBinding(moduleKey string) (*modulecapability.StaticBinding, error
 	summary := modulecapability.ModuleSummary{
 		Identity: modulecapability.ModuleIdentity{Key: moduleKey, SourceOwner: moduleKey, ModuleVersion: "fixture-v1", ValidationRevision: "fixture-validation-v1", SupportedDeploymentModes: []modulecapability.DeploymentMode{modulecapability.DeploymentModeModule, modulecapability.DeploymentModeSaaS}},
 		Name:     "Fixture", Description: "Remote transport fixture.",
-		Scenarios: modulecapability.AdaptationScenarios{
-			UseWhen: []string{"testing remote transport"}, DoNotUseWhen: []string{"production capability discovery"}, RequirementSignals: []string{"fixture"}, ProvidedCapabilities: []string{"fixture"},
-			RequiredModules: []string{}, OptionalModules: []string{}, ConflictingModules: []string{}, AssemblyChains: []string{"fixture_chain"}, ValidationScopes: []string{"fixture.validate"},
-			SelectionExamples: []modulecapability.ScenarioExample{{Requirement: "test transport", Reason: "fixture"}}, RejectionExamples: []modulecapability.ScenarioExample{{Requirement: "production", Reason: "fixture only"}},
+		Composition: modulecapability.ModuleComposition{
+			ProvidedCapabilities: []string{"fixture"},
+			RequiredModules:      []string{}, OptionalModules: []string{}, ConflictingModules: []string{}, AssemblyChains: []string{"fixture_chain"}, ValidationScopes: []string{"fixture.validate"},
 		},
 	}
 	return modulecapability.NewStaticBinding(summary, []modulecapability.CategoryDocument{category}, nil)

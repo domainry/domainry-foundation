@@ -18,10 +18,31 @@ lifecycle.
   authentication, workers, persistence, and operations routes are deployment
   evidence and never enter this model-facing contract automatically.
 
+## Canonical repository layout
+
+Every Runtime or module owner uses exactly one capability-contract location:
+
+```text
+capability/
+  capability.go       # public Inputs and Open entrypoint
+  contract.go         # the only ModuleSummary/NewStaticBinding construction
+  agent/
+    index.json         # machine-readable scenario routing
+    *.md               # source-owned scenario and adaptation guides
+```
+
+`internal/transport`, `internal/adapter`, and `internal/assembly` may expose
+immutable route, OpenAPI, or SDK facts consumed by `capability/contract.go`, but
+they must not construct another module summary. This keeps the dependency
+direction correct: the public owner contract describes execution adapters;
+deployment adapters do not become capability authorities. Owner repositories
+call `contracttest.VerifyRepositoryLayout` so a second contract location fails
+in tests instead of becoming a new convention.
+
 ## Typed Binding methods
 
-1. `CapabilitySummary` returns the small module identity, adaptation scenarios,
-   dependencies, and category index used for PRD-driven module selection.
+1. `CapabilitySummary` returns the small module identity, machine composition
+   facts, and category index. It does not contain PRD selection prose.
 2. `CapabilityCategory` returns one exact category containing all of its full
    OpenAPI Operations and their exact transitive component closure, plus any
    bounded source-owned non-endpoint projections used by that category (for
@@ -120,6 +141,19 @@ does not express:
 
 Assembly chains and validation scopes live at module/category level. They are
 not copied onto every endpoint.
+
+## Scenario guidance has one owner
+
+The summary's `composition` contains only facts a host can validate and act on:
+provided capabilities, required/optional/conflicting modules, assembly chains,
+and validation scopes. Business selection guidance is source-owned by the
+module's `capability/agent/index.json` and Markdown documents.
+
+Consequently this contract does not expose `scenarios`, `use_when`,
+`do_not_use_when`, `requirement_signals`, or selection/rejection examples.
+Plane must not reconstruct those fields from the machine summary. A product
+compiler may project a locked source guide and add its own adapter coverage and
+limitations, but it must not create a second module-scenario authority.
 
 ## Removed from the model-facing endpoint document
 

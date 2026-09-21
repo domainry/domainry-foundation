@@ -34,9 +34,8 @@ func TestCategoryFromHTTPRoutesRequiresCompleteOwnerManifest(t *testing.T) {
 	summary := ModuleSummary{
 		Identity: ModuleIdentity{Key: "example", SourceOwner: "example", ModuleVersion: "v1", ValidationRevision: "example-validation-v1", SupportedDeploymentModes: []DeploymentMode{DeploymentModeModule}},
 		Name:     "Example", Description: "Example module.",
-		Scenarios: AdaptationScenarios{
-			UseWhen: []string{"examples are required"}, DoNotUseWhen: []string{"examples are not required"}, RequirementSignals: []string{"example"}, ProvidedCapabilities: []string{"example.read"},
-			AssemblyChains: []string{"example_chain"}, ValidationScopes: []string{"example.query"}, SelectionExamples: []ScenarioExample{{Requirement: "read examples", Reason: "example owns reads"}}, RejectionExamples: []ScenarioExample{{Requirement: "write records", Reason: "example does not own records"}},
+		Composition: ModuleComposition{
+			ProvidedCapabilities: []string{"example.read"}, AssemblyChains: []string{"example_chain"}, ValidationScopes: []string{"example.query"},
 		},
 	}
 	if _, err := NewStaticBinding(summary, []CategoryDocument{document}, nil); err != nil {

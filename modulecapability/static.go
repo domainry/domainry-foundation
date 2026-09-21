@@ -69,26 +69,17 @@ func normalizeModuleSummaryCollections(summary *ModuleSummary) {
 		summary.Identity.SupportedDeploymentModes = []DeploymentMode{}
 	}
 	collections := []*[]string{
-		&summary.Scenarios.UseWhen,
-		&summary.Scenarios.DoNotUseWhen,
-		&summary.Scenarios.RequirementSignals,
-		&summary.Scenarios.ProvidedCapabilities,
-		&summary.Scenarios.RequiredModules,
-		&summary.Scenarios.OptionalModules,
-		&summary.Scenarios.ConflictingModules,
-		&summary.Scenarios.AssemblyChains,
-		&summary.Scenarios.ValidationScopes,
+		&summary.Composition.ProvidedCapabilities,
+		&summary.Composition.RequiredModules,
+		&summary.Composition.OptionalModules,
+		&summary.Composition.ConflictingModules,
+		&summary.Composition.AssemblyChains,
+		&summary.Composition.ValidationScopes,
 	}
 	for _, collection := range collections {
 		if *collection == nil {
 			*collection = []string{}
 		}
-	}
-	if summary.Scenarios.SelectionExamples == nil {
-		summary.Scenarios.SelectionExamples = []ScenarioExample{}
-	}
-	if summary.Scenarios.RejectionExamples == nil {
-		summary.Scenarios.RejectionExamples = []ScenarioExample{}
 	}
 	if summary.Categories == nil {
 		summary.Categories = []CategorySummary{}
