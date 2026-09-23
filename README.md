@@ -10,6 +10,7 @@ Workflow, or other product-domain behavior.
 - `capacity`: bounded process-local admission control by workspace and use case.
 - `collection`: deterministic generic collection helpers.
 - `decimal`: exact, bounded decimal normalization and arithmetic shared by deterministic engines.
+- `definition`: canonical shared Definition contracts, `_definitions` / `_definition_versions` schema, and the SQL Store opened locally by each module or SaaS service.
 - `expression`: storage-neutral expression contracts, validation, and deterministic evaluation.
 - `filelock`: cross-platform process file locking.
 - `health`: bounded technical check evaluation and diagnostic history.
@@ -26,9 +27,11 @@ Workflow, or other product-domain behavior.
 - `worker`: process lifecycle, durable worker contracts, retry, wakeup, and fair ordering.
 
 Application configuration, product branding, localization catalogs, product-domain
-models, HTTP handlers, and persistence adapters belong to consuming services rather
-than this module. Foundation expression contracts deliberately know nothing about
-Runtime records, authorization, or storage.
+models, HTTP handlers, and product-specific persistence adapters belong to consuming
+services rather than this module. Canonical persistence kernels for explicitly shared
+tables belong here so their DDL and invariants have one maintenance point. Foundation
+expression contracts deliberately know nothing about Runtime records, authorization,
+or storage.
 
 ## Development
 
