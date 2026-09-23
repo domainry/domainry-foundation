@@ -50,6 +50,7 @@ type Record struct {
 }
 
 type RecordFilter struct {
+	AllScopes              bool
 	WorkspaceID            string
 	SystemPurpose          string
 	ID                     string
@@ -469,11 +470,17 @@ func (value Record) validate() error {
 
 func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	workspace, system := strings.TrimSpace(filter.WorkspaceID), strings.TrimSpace(filter.SystemPurpose)
-	if (workspace == "") == (system == "") {
+	if filter.AllScopes {
+		if workspace != "" || system != "" {
+			return nil, fmt.Errorf("operation record all-scopes filter cannot include a workspace or system scope")
+		}
+	} else if (workspace == "") == (system == "") {
 		return nil, fmt.Errorf("operation record filter requires exactly one workspace or system scope")
 	}
 	var predicate query.Predicate
-	if system != "" {
+	if filter.AllScopes {
+		predicate = query.AlwaysTrue()
+	} else if system != "" {
 		predicate = query.And(query.Equal("workspace_id", ""), query.Equal("system_purpose", system))
 	} else {
 		predicate = query.Equal("system_purpose", "")
