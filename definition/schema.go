@@ -62,7 +62,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("kind", ormschema.TextKey(128)), required("definition_key", ormschema.TextKey(255)),
 		required("schema_version", ormschema.TextKey(255)), required("schema_hash", ormschema.TextKey(255)),
 		required("payload_json", ormschema.LongText()), required("created_at", ormschema.TextKey(255)),
-	).PrimaryKey("id").Unique("definition_id", "schema_version").Unique("definition_id", "schema_hash").Build()
+	).PrimaryKey("id").Unique("definition_id", "schema_version").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", VersionTableName, err)
 	}
