@@ -313,6 +313,28 @@ func (s *SQLStore) PutControl(ctx context.Context, value Control, expectedRevisi
 	return changed == 1, err
 }
 
+func (s *SQLStore) ControlStateExists(ctx context.Context, purpose, kind, state string) (bool, error) {
+	if err := s.validate(); err != nil {
+		return false, err
+	}
+	purpose, kind, state = strings.TrimSpace(purpose), strings.TrimSpace(kind), strings.TrimSpace(state)
+	if purpose == "" || kind == "" || state == "" {
+		return false, fmt.Errorf("operation control purpose, kind, and state are required")
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, ControlTableName).
+		Projections(query.Project(query.CountAll())).Where(query.And(
+		query.Equal("system_purpose", purpose), query.Equal("control_kind", kind), query.Equal("state", state),
+	)).Build()
+	if err != nil {
+		return false, err
+	}
+	var count int64
+	if err := ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, args...).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (s *SQLStore) getByKey(ctx context.Context, scope Scope, owner, kind, key string) (ManagedOperation, bool, error) {
 	statement, args, err := operationSelect(s, scope.WorkspaceID).Columns(operationColumns...).Where(and(
 		scopePredicate(scope), query.Equal("owner", strings.TrimSpace(owner)), query.Equal("kind", strings.TrimSpace(kind)), query.Equal("idempotency_key", strings.TrimSpace(key)),

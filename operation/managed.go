@@ -173,6 +173,7 @@ func (value Control) Validate() error {
 type ControlStore interface {
 	GetControl(context.Context, string, string, string) (Control, bool, error)
 	PutControl(context.Context, Control, int64) (bool, error)
+	ControlStateExists(context.Context, string, string, string) (bool, error)
 }
 
 type executorContextKey struct{}
