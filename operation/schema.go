@@ -29,9 +29,38 @@ type Dialect interface {
 	Insert(string, []string) string
 }
 
+// Renderer is the narrow dialect surface exposed by module hosts. AdaptDialect
+// adds the canonical INSERT rendering needed by the Operations SQL Store so
+// business modules do not each maintain an adapter.
+type Renderer interface {
+	Identifier(string) string
+	Table(string) string
+	Placeholder(int) string
+}
+
+type adaptedDialect struct{ Renderer }
+
+func AdaptDialect(renderer Renderer) Dialect {
+	if renderer == nil {
+		return nil
+	}
+	if dialect, ok := renderer.(Dialect); ok {
+		return dialect
+	}
+	return adaptedDialect{Renderer: renderer}
+}
+
+func (d adaptedDialect) Insert(table string, columns []string) string {
+	quoted := make([]string, len(columns))
+	values := make([]string, len(columns))
+	for index, column := range columns {
+		quoted[index] = d.Identifier(column)
+		values[index] = d.Placeholder(index + 1)
+	}
+	return "INSERT INTO " + d.Table(table) + " (" + strings.Join(quoted, ", ") + ") VALUES (" + strings.Join(values, ", ") + ")"
+}
+
 type MigrationRegistrar interface {
-	Driver() string
-	Schema() string
 	ApplyOwnedMigrations(context.Context, string, []SchemaMigration) error
 }
 

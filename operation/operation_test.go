@@ -65,3 +65,18 @@ func TestOperationsKernelOwnsBreakGlassSchema(t *testing.T) {
 		}
 	}
 }
+
+type minimalRenderer struct{}
+
+func (minimalRenderer) Identifier(value string) string { return `"` + value + `"` }
+func (minimalRenderer) Table(value string) string      { return `"` + value + `"` }
+func (minimalRenderer) Placeholder(index int) string   { return "?" }
+
+func TestAdaptDialectAddsCanonicalInsertRendering(t *testing.T) {
+	dialect := AdaptDialect(minimalRenderer{})
+	got := dialect.Insert("_operations", []string{"id", "status"})
+	want := `INSERT INTO "_operations" ("id", "status") VALUES (?, ?)`
+	if got != want {
+		t.Fatalf("adapted INSERT=%q want=%q", got, want)
+	}
+}
