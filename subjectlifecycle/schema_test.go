@@ -46,6 +46,17 @@ func TestEnsureSchemaUsesSharedOwner(t *testing.T) {
 	}
 }
 
+func TestMySQLSubjectLifecycleUsesBoundedCompositeKeys(t *testing.T) {
+	migrations, err := SchemaMigrations("mysql", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(migrations[0].Statements, "\n")
+	if count := strings.Count(joined, "VARCHAR(128)"); count < 10 {
+		t.Fatalf("Subject Lifecycle MySQL migration has %d bounded key columns, want at least 10", count)
+	}
+}
+
 type recordingRegistrar struct {
 	owner      string
 	migrations []SchemaMigration

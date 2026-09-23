@@ -16,6 +16,7 @@ const (
 	RequestTableName = "_subject_requests"
 	StepTableName    = "_subject_steps"
 	MigrationOwner   = "shared/subject-lifecycle"
+	indexKeyLength   = 128
 )
 
 type SchemaMigration = ormmigration.Migration
@@ -112,11 +113,11 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 }
 
 func requiredKey(name string) ormschema.ColumnDefinition {
-	return ormschema.Column(name, ormschema.TextKey(191)).NotNull()
+	return ormschema.Column(name, ormschema.TextKey(indexKeyLength)).NotNull()
 }
 
 func optionalKey(name string) ormschema.ColumnDefinition {
-	return ormschema.Column(name, ormschema.TextKey(191)).NotNull().DefaultValue("")
+	return ormschema.Column(name, ormschema.TextKey(indexKeyLength)).NotNull().DefaultValue("")
 }
 
 func OwnedTables() []string { return []string{RequestTableName, StepTableName} }
