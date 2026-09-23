@@ -50,23 +50,52 @@ type Record struct {
 }
 
 type RecordFilter struct {
-	WorkspaceID    string
-	SystemPurpose  string
-	ID             string
-	Owner          string
-	Kind           string
-	IdempotencyKey string
-	Status         string
-	FailureClass   string
-	ParentID       string
-	ResourceType   string
-	ResourceID     string
-	RequestedBy    string
-	Correlation    string
-	CreatedFrom    string
-	CreatedTo      string
-	Search         string
-	Limit          int
+	WorkspaceID            string
+	SystemPurpose          string
+	ID                     string
+	Owner                  string
+	Kind                   string
+	ActionKey              string
+	IdempotencyKey         string
+	RequestFingerprint     string
+	Reference              string
+	Status                 string
+	Statuses               []string
+	FailureClass           string
+	ParentID               string
+	ResourceType           string
+	ResourceID             string
+	RequestedBy            string
+	Correlation            string
+	CreatedFrom            string
+	CreatedTo              string
+	Search                 string
+	LeaseOwner             string
+	FencingToken           *int64
+	LeaseExpiresAtOrBefore string
+	Limit                  int
+}
+
+type RecordChanges struct {
+	Status                *string
+	Reason                *string
+	Reference             *string
+	ResultJSON            *json.RawMessage
+	MetadataJSON          *json.RawMessage
+	ErrorCode             *string
+	FailureClass          *string
+	NextAction            *string
+	RelatedIDsJSON        *json.RawMessage
+	Correlation           *string
+	EvidenceJSON          *json.RawMessage
+	LeaseOwner            *string
+	LeaseExpiresAt        *string
+	FencingToken          *int64
+	IncrementFencingToken bool
+	ExpiresAt             *string
+	StartedAt             *string
+	FinishedAt            *string
+	UpdatedAt             *string
 }
 
 type RecordSummary struct {
@@ -78,6 +107,11 @@ type RecordPage struct {
 	Items   []Record
 	Count   int
 	Summary RecordSummary
+}
+
+type LeaseCounts struct {
+	Live    int64
+	Expired int64
 }
 
 func (s *SQLStore) InsertRecord(ctx context.Context, value Record) (bool, error) {
@@ -244,6 +278,141 @@ func (s *SQLStore) UpdateRecord(ctx context.Context, value Record, expectedStatu
 	return rows == 1, err
 }
 
+func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes RecordChanges) (bool, error) {
+	if err := s.validate(); err != nil {
+		return false, err
+	}
+	predicate, err := recordPredicate(filter)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(filter.ID) == "" {
+		return false, fmt.Errorf("operation record patch requires id")
+	}
+	builder := recordUpdate(s, filter.WorkspaceID)
+	assignments := 0
+	setString := func(column string, value *string) {
+		if value != nil {
+			builder = builder.Set(column, *value)
+			assignments++
+		}
+	}
+	setJSON := func(column string, value *json.RawMessage) error {
+		if value == nil {
+			return nil
+		}
+		if !json.Valid(*value) {
+			return fmt.Errorf("operation record patch JSON is invalid")
+		}
+		builder = builder.Set(column, string(*value))
+		assignments++
+		return nil
+	}
+	setString("status", changes.Status)
+	setString("reason", changes.Reason)
+	setString("reference", changes.Reference)
+	if err := setJSON("result_json", changes.ResultJSON); err != nil {
+		return false, err
+	}
+	if err := setJSON("metadata_json", changes.MetadataJSON); err != nil {
+		return false, err
+	}
+	setString("error_code", changes.ErrorCode)
+	setString("failure_class", changes.FailureClass)
+	setString("next_action", changes.NextAction)
+	if err := setJSON("related_ids_json", changes.RelatedIDsJSON); err != nil {
+		return false, err
+	}
+	setString("correlation", changes.Correlation)
+	if err := setJSON("evidence_json", changes.EvidenceJSON); err != nil {
+		return false, err
+	}
+	setString("lease_owner", changes.LeaseOwner)
+	setString("lease_expires_at", changes.LeaseExpiresAt)
+	if changes.FencingToken != nil {
+		builder = builder.Set("fencing_token", *changes.FencingToken)
+		assignments++
+	}
+	if changes.IncrementFencingToken {
+		if changes.FencingToken != nil {
+			return false, fmt.Errorf("operation record patch cannot set and increment fencing token")
+		}
+		builder = builder.SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1)))
+		assignments++
+	}
+	setString("expires_at", changes.ExpiresAt)
+	setString("started_at", changes.StartedAt)
+	setString("finished_at", changes.FinishedAt)
+	setString("updated_at", changes.UpdatedAt)
+	if assignments == 0 {
+		return false, fmt.Errorf("operation record patch requires changes")
+	}
+	statement, arguments, err := builder.Where(predicate).Build()
+	if err != nil {
+		return false, err
+	}
+	result, err := ExecutorFromContext(ctx, s.database).ExecContext(ctx, statement, arguments...)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows == 1, err
+}
+
+func (s *SQLStore) DeleteRecords(ctx context.Context, filter RecordFilter) (int64, error) {
+	if err := s.validate(); err != nil {
+		return 0, err
+	}
+	predicate, err := recordPredicate(filter)
+	if err != nil {
+		return 0, err
+	}
+	var builder *query.DeleteBuilder
+	if strings.TrimSpace(filter.WorkspaceID) != "" {
+		builder = query.NewWorkspaceDeleteBuilder(s.dialect, TableName, strings.TrimSpace(filter.WorkspaceID))
+	} else {
+		builder = query.NewDeleteBuilder(s.dialect, TableName)
+	}
+	statement, arguments, err := builder.Where(predicate).Build()
+	if err != nil {
+		return 0, err
+	}
+	result, err := ExecutorFromContext(ctx, s.database).ExecContext(ctx, statement, arguments...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *SQLStore) CountLeases(ctx context.Context, filter RecordFilter, instanceID, now string) (LeaseCounts, error) {
+	if err := s.validate(); err != nil {
+		return LeaseCounts{}, err
+	}
+	predicate, err := recordPredicate(filter)
+	if err != nil {
+		return LeaseCounts{}, err
+	}
+	predicate = and(predicate, query.NotEqual("lease_owner", ""))
+	if instanceID = strings.TrimSpace(instanceID); instanceID != "" {
+		predicate = and(predicate, query.Or(query.Equal("lease_owner", instanceID), query.Like("lease_owner", instanceID+":%"), query.Like("lease_owner", instanceID+"-%")))
+	}
+	now = strings.TrimSpace(now)
+	if now == "" {
+		return LeaseCounts{}, fmt.Errorf("operation lease count time is required")
+	}
+	live := query.Coalesce(query.Sum(query.CaseWhen(query.GreaterThan("lease_expires_at", now), 1).Else(0)), query.Value(0))
+	expired := query.Coalesce(query.Sum(query.CaseWhen(query.And(query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", now)), 1).Else(0)), query.Value(0))
+	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Projections(query.Project(live), query.Project(expired)).Where(predicate).Build()
+	if err != nil {
+		return LeaseCounts{}, err
+	}
+	var liveValue, expiredValue sql.NullInt64
+	if err := ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, arguments...).Scan(&liveValue, &expiredValue); err != nil {
+		return LeaseCounts{}, err
+	}
+	return LeaseCounts{Live: liveValue.Int64, Expired: expiredValue.Int64}, nil
+}
+
 func (s *SQLStore) ListControls(ctx context.Context, purpose, kind string, limit int) ([]Control, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
@@ -317,7 +486,10 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	addExact("id", filter.ID)
 	addExact("owner", filter.Owner)
 	addExact("kind", filter.Kind)
+	addExact("action_key", filter.ActionKey)
 	addExact("idempotency_key", filter.IdempotencyKey)
+	addExact("request_fingerprint", filter.RequestFingerprint)
+	addExact("reference", filter.Reference)
 	addExact("status", filter.Status)
 	addExact("failure_class", filter.FailureClass)
 	addExact("parent_id", filter.ParentID)
@@ -325,6 +497,24 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	addExact("resource_id", filter.ResourceID)
 	addExact("requested_by", filter.RequestedBy)
 	addExact("correlation", filter.Correlation)
+	addExact("lease_owner", filter.LeaseOwner)
+	if len(filter.Statuses) != 0 {
+		values := make([]any, 0, len(filter.Statuses))
+		for _, status := range filter.Statuses {
+			if status = strings.TrimSpace(status); status != "" {
+				values = append(values, status)
+			}
+		}
+		if len(values) != 0 {
+			predicate = and(predicate, query.In("status", values...))
+		}
+	}
+	if filter.FencingToken != nil {
+		predicate = and(predicate, query.Equal("fencing_token", *filter.FencingToken))
+	}
+	if value := strings.TrimSpace(filter.LeaseExpiresAtOrBefore); value != "" {
+		predicate = and(predicate, query.LessThanOrEqual("lease_expires_at", value))
+	}
 	if value := strings.TrimSpace(filter.CreatedFrom); value != "" {
 		predicate = and(predicate, query.GreaterThanOrEqual("created_at", value))
 	}
