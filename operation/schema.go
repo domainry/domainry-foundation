@@ -98,7 +98,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("idempotency_key", ormschema.TextKey(191)), required("request_fingerprint", ormschema.TextKey(255)), required("requested_by", ormschema.TextKey(255)),
 		required("reason", ormschema.LongText()), defaulted("reference", ormschema.TextKey(255), ""), required("status", ormschema.TextKey(191)),
 		required("status_url", ormschema.LongText()), required("result_json", ormschema.LongText()), required("metadata_json", ormschema.LongText()),
-		defaulted("error_code", ormschema.TextKey(255), ""), defaulted("failure_class", ormschema.TextKey(255), ""), defaulted("next_action", ormschema.LongText(), ""),
+		defaulted("error_code", ormschema.TextKey(255), ""), defaulted("failure_class", ormschema.TextKey(255), ""), required("next_action", ormschema.LongText()),
 		required("related_ids_json", ormschema.LongText()), defaulted("correlation", ormschema.TextKey(255), ""), required("evidence_json", ormschema.LongText()),
 		defaulted("lease_owner", ormschema.TextKey(255), ""), defaulted("lease_expires_at", ormschema.TextKey(191), ""), defaulted("fencing_token", ormschema.BigInt(), 0),
 		defaulted("expires_at", ormschema.TextKey(191), ""), required("created_at", ormschema.TextKey(191)), defaulted("started_at", ormschema.TextKey(255), ""),
@@ -109,7 +109,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 	}
 	controls, _, err := ormschema.NewTable(renderer, ControlTableName).IfNotExists().Columns(
 		required("system_purpose", ormschema.TextKey(255)), required("control_kind", ormschema.TextKey(255)), required("owner", ormschema.TextKey(255)),
-		required("state", ormschema.TextKey(191)), required("reason", ormschema.Text()), defaulted("reference", ormschema.Text(), ""),
+		required("state", ormschema.TextKey(191)), required("reason", ormschema.Text()), required("reference", ormschema.Text()),
 		required("updated_by", ormschema.Text()), required("revision", ormschema.BigInt()), required("updated_at", ormschema.Text()),
 	).Build()
 	if err != nil {
@@ -121,7 +121,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("incident_ref", ormschema.TextKey(255)), required("alert_target", ormschema.TextKey(255)), required("audit_event_id", ormschema.TextKey(255)),
 		required("expires_at", ormschema.TextKey(40)), required("revision", ormschema.BigInt()), required("created_at", ormschema.TextKey(40)),
 		required("updated_at", ormschema.TextKey(40)), defaulted("revoked_at", ormschema.TextKey(40), ""),
-		defaulted("revoked_by", ormschema.TextKey(255), ""), defaulted("revocation_note", ormschema.LongText(), ""),
+		defaulted("revoked_by", ormschema.TextKey(255), ""), required("revocation_note", ormschema.LongText()),
 	).PrimaryKey("id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", BreakGlassTableName, err)

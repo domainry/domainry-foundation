@@ -66,6 +66,19 @@ func TestOperationsKernelOwnsBreakGlassSchema(t *testing.T) {
 	}
 }
 
+func TestOperationsMySQLMigrationDoesNotDefaultTextColumns(t *testing.T) {
+	migrations, err := SchemaMigrations("mysql", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.ToUpper(strings.Join(migrations[0].Statements, "\n"))
+	for _, forbidden := range []string{"TEXT NOT NULL DEFAULT", "LONGTEXT NOT NULL DEFAULT"} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("Operations MySQL migration contains unsupported %q clause", forbidden)
+		}
+	}
+}
+
 type minimalRenderer struct{}
 
 func (minimalRenderer) Identifier(value string) string { return `"` + value + `"` }
