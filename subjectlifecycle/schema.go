@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/schemaownership"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
 	ormschema "github.com/domainry/domainry-orm/schema"
@@ -69,7 +70,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		optionalKey("owner_org_id"), optionalKey("download_expires_at"),
 		ormschema.Column("backup_pending", ormschema.Boolean()).NotNull().DefaultValue(false),
 		requiredKey("updated_at"), ormschema.Column("payload_json", ormschema.Text()).NotNull(),
-	).Build()
+	).PrimaryKey("workspace_id", "id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", RequestTableName, err)
 	}
@@ -87,7 +88,6 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		unique      bool
 		columns     []string
 	}{
-		{"uniq_subject_workspace_identity", RequestTableName, true, []string{"workspace_id", "id"}},
 		{"idx_subject_identity", RequestTableName, false, []string{"workspace_id", "subject_id", "status", "updated_at"}},
 		{"idx_subject_erasure_identity", RequestTableName, false, []string{"workspace_id", "request_type", "kind", "resolved_identity", "id"}},
 		{"idx_subject_request_type", RequestTableName, false, []string{"workspace_id", "request_type", "updated_at", "id"}},
@@ -120,4 +120,21 @@ func optionalKey(name string) ormschema.ColumnDefinition {
 	return ormschema.Column(name, ormschema.TextKey(indexKeyLength)).NotNull().DefaultValue("")
 }
 
-func OwnedTables() []string { return []string{RequestTableName, StepTableName} }
+func SchemaOwnership() []schemaownership.Table {
+	return []schemaownership.Table{
+		{
+			Name: RequestTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+			RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"workspace_id", "id"},
+			BoundedQueryPath: "workspace/request identity; subject, request-type and worker indexes bound lifecycle scans",
+			DeletionPolicy:   "request state is retained as lifecycle audit evidence; subject payloads follow the governing export/erasure policy",
+		},
+		{
+			Name: StepTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+			RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"workspace_id", "request_id", "owner", "operation"},
+			BoundedQueryPath: "workspace/request identity or workspace/owner/operation erasure-fence identity",
+			DeletionPolicy:   "idempotent completion evidence is retained with its lifecycle request",
+		},
+	}
+}
+
+func OwnedTables() []string { return schemaownership.Names(SchemaOwnership()) }

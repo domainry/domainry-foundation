@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/schemaownership"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
 	"github.com/domainry/domainry-orm/sqlhost"
@@ -59,4 +60,21 @@ func SchemaMigrations(driver, schema string) ([]SchemaMigration, error) {
 	return []SchemaMigration{migration}, nil
 }
 
-func OwnedTables() []string { return []string{TableName, BindingTableName} }
+func SchemaOwnership() []schemaownership.Table {
+	return []schemaownership.Table{
+		{
+			Name: TableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+			RetentionClass: schemaownership.RetentionRegisteredRowPolicy, PrimaryKey: []string{"id"},
+			BoundedQueryPath: "workspace plus id/token/registered owner-kind identity; cursor and cleanup queries enforce limits",
+			DeletionPolicy:   "expired or rejected blob content is deleted idempotently and the registry row becomes a deleted tombstone",
+		},
+		{
+			Name: BindingTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+			RetentionClass: schemaownership.RetentionRegisteredRowPolicy, PrimaryKey: []string{"id"},
+			BoundedQueryPath: "workspace plus artifact identity or registered owner-kind resource identity with an enforced limit",
+			DeletionPolicy:   "bindings follow the registered artifact owner policy and remain attached to retained artifact tombstones",
+		},
+	}
+}
+
+func OwnedTables() []string { return schemaownership.Names(SchemaOwnership()) }

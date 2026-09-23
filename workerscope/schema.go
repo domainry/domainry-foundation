@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/schemaownership"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormmigration "github.com/domainry/domainry-orm/migration"
 	ormschema "github.com/domainry/domainry-orm/schema"
@@ -99,4 +100,13 @@ func defaulted(name string, kind ormschema.ColumnType, value any) ormschema.Colu
 	return ormschema.Column(name, kind).NotNull().DefaultValue(value)
 }
 
-func OwnedTables() []string { return []string{TableName} }
+func SchemaOwnership() []schemaownership.Table {
+	return []schemaownership.Table{{
+		Name: TableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeExplicitMixed,
+		RetentionClass: schemaownership.RetentionRegisteredRowPolicy, PrimaryKey: []string{"id"},
+		BoundedQueryPath: "registered owner plus scope_key cursor; exact identity and owner-scoped lease queries",
+		DeletionPolicy:   "one row lives for each registered owner scope and is retired when that owner scope is removed",
+	}}
+}
+
+func OwnedTables() []string { return schemaownership.Names(SchemaOwnership()) }

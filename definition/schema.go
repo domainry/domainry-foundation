@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/schemaownership"
 	ormdialect "github.com/domainry/domainry-orm/dialect"
 	ormschema "github.com/domainry/domainry-orm/schema"
 )
@@ -77,4 +78,21 @@ func optional(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition
 	return ormschema.Column(name, kind)
 }
 
-func OwnedTables() []string { return []string{TableName, VersionTableName} }
+func SchemaOwnership() []schemaownership.Table {
+	return []schemaownership.Table{
+		{
+			Name: TableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeInstallation,
+			RetentionClass: schemaownership.RetentionInstallation, PrimaryKey: []string{"id"},
+			BoundedQueryPath: "installation_id plus owner/kind/definition_key identity; registered owner/kind listing",
+			DeletionPolicy:   "source snapshot replacement deletes disabled current rows; active rows live for the source lifetime",
+		},
+		{
+			Name: VersionTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeInstallation,
+			RetentionClass: schemaownership.RetentionInstallation, PrimaryKey: []string{"id"},
+			BoundedQueryPath: "definition_id plus schema_version identity; installation/owner/kind/definition_key history",
+			DeletionPolicy:   "immutable version history is retained for the installation lifetime",
+		},
+	}
+}
+
+func OwnedTables() []string { return schemaownership.Names(SchemaOwnership()) }
