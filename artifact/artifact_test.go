@@ -3,6 +3,8 @@ package artifact
 import (
 	"context"
 	"database/sql"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -34,4 +36,23 @@ func TestExecutorContextPrefersHostTransaction(t *testing.T) {
 	}
 	var _ Executor = (*sql.DB)(nil)
 	var _ Executor = (*sql.Tx)(nil)
+}
+
+func TestArtifactKernelOwnsCanonicalSchema(t *testing.T) {
+	if !slices.Equal(OwnedTables(), []string{TableName, BindingTableName}) {
+		t.Fatalf("unexpected Artifact-owned tables: %v", OwnedTables())
+	}
+	migrations, err := SchemaMigrations("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) != 1 || migrations[0].Version != 1 {
+		t.Fatalf("unexpected Artifact migrations: %#v", migrations)
+	}
+	joined := strings.Join(migrations[0].Statements, "\n")
+	for _, required := range []string{TableName, BindingTableName, "idx_artifact_owner_cursor", "idx_artifact_binding_resource"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("Artifact migration is missing %s", required)
+		}
+	}
 }
