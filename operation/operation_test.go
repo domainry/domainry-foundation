@@ -77,6 +77,9 @@ func TestOperationsMySQLMigrationDoesNotDefaultTextColumns(t *testing.T) {
 			t.Fatalf("Operations MySQL migration contains unsupported %q clause", forbidden)
 		}
 	}
+	if count := strings.Count(joined, "VARCHAR(128)"); count < 4 {
+		t.Fatalf("Operations MySQL migration has %d bounded composite-key columns, want at least 4", count)
+	}
 }
 
 type minimalRenderer struct{}

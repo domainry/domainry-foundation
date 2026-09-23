@@ -16,6 +16,7 @@ const (
 	ControlTableName    = "_operation_controls"
 	BreakGlassTableName = "_operation_break_glass_grants"
 	MigrationOwner      = "shared/operations"
+	compositeKeyLength  = 128
 )
 
 type Database = sqlhost.Database
@@ -92,10 +93,10 @@ func SchemaMigrations(driver, schema string) ([]SchemaMigration, error) {
 
 func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 	operations, _, err := ormschema.NewTable(renderer, TableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), defaulted("system_purpose", ormschema.TextKey(191), ""),
-		required("owner", ormschema.TextKey(191)), required("kind", ormschema.TextKey(191)), required("action_key", ormschema.TextKey(255)),
+		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), defaulted("system_purpose", ormschema.TextKey(compositeKeyLength), ""),
+		required("owner", ormschema.TextKey(compositeKeyLength)), required("kind", ormschema.TextKey(compositeKeyLength)), required("action_key", ormschema.TextKey(255)),
 		defaulted("parent_id", ormschema.TextKey(255), ""), required("resource_type", ormschema.TextKey(255)), defaulted("resource_id", ormschema.TextKey(255), ""),
-		required("idempotency_key", ormschema.TextKey(191)), required("request_fingerprint", ormschema.TextKey(255)), required("requested_by", ormschema.TextKey(255)),
+		required("idempotency_key", ormschema.TextKey(compositeKeyLength)), required("request_fingerprint", ormschema.TextKey(255)), required("requested_by", ormschema.TextKey(255)),
 		required("reason", ormschema.LongText()), defaulted("reference", ormschema.TextKey(255), ""), required("status", ormschema.TextKey(191)),
 		required("status_url", ormschema.LongText()), required("result_json", ormschema.LongText()), required("metadata_json", ormschema.LongText()),
 		defaulted("error_code", ormschema.TextKey(255), ""), defaulted("failure_class", ormschema.TextKey(255), ""), required("next_action", ormschema.LongText()),
