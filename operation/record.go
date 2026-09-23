@@ -468,6 +468,27 @@ func (s *SQLStore) CountLeases(ctx context.Context, filter RecordFilter, instanc
 	return LeaseCounts{Live: liveValue.Int64, Expired: expiredValue.Int64}, nil
 }
 
+func (s *SQLStore) CountExpiredLeases(ctx context.Context, filter RecordFilter, now string) (int64, error) {
+	if err := s.validate(); err != nil {
+		return 0, err
+	}
+	predicate, err := recordPredicate(filter)
+	if err != nil {
+		return 0, err
+	}
+	if now = strings.TrimSpace(now); now == "" {
+		return 0, fmt.Errorf("operation expired lease count time is required")
+	}
+	predicate = and(predicate, query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", now))
+	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Projections(query.Project(query.CountAll())).Where(predicate).Build()
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	err = ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, arguments...).Scan(&count)
+	return count, err
+}
+
 func (s *SQLStore) ListControls(ctx context.Context, purpose, kind string, limit int) ([]Control, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
