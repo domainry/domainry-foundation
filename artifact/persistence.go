@@ -23,8 +23,6 @@ type Dialect interface {
 }
 
 type MigrationRegistrar interface {
-	Driver() string
-	Schema() string
 	ApplyOwnedMigrations(context.Context, string, []SchemaMigration) error
 }
 
