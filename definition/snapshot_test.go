@@ -24,3 +24,12 @@ func TestSnapshotRevisionUsesUnambiguousFieldBoundaries(t *testing.T) {
 		t.Fatal("snapshot revision field boundaries are ambiguous")
 	}
 }
+
+func TestAgentDefinitionKindsShareOneRegisteredOwner(t *testing.T) {
+	for _, kind := range []string{"skill", "agent", "agent_task", "agent_entrypoint", "agent_service_principal"} {
+		owner, normalized, err := normalizeOwnerKind(OwnerAgent, kind)
+		if err != nil || owner != OwnerAgent || normalized != kind {
+			t.Errorf("Agent definition kind %q: owner=%q kind=%q err=%v", kind, owner, normalized, err)
+		}
+	}
+}
