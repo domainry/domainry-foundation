@@ -129,6 +129,12 @@ type VersionQuery struct {
 	SchemaVersion string
 }
 
+type VersionListQuery struct {
+	Owner        string
+	ResourceType string
+	ResourceKey  string
+}
+
 type Version struct {
 	ID            string          `json:"id"`
 	Owner         string          `json:"owner"`
@@ -148,6 +154,7 @@ type StorePort interface {
 	Publish(context.Context, PublishCommand) (PublishResult, error)
 	Disable(context.Context, DisableCommand) error
 	GetVersion(context.Context, VersionQuery) (Version, bool, error)
+	ListVersions(context.Context, VersionListQuery) ([]Version, error)
 }
 
 type Database = sqlhost.Database

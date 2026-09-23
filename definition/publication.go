@@ -225,6 +225,46 @@ func (s Store) GetVersion(ctx context.Context, value VersionQuery) (Version, boo
 	return result, true, nil
 }
 
+func (s Store) ListVersions(ctx context.Context, value VersionListQuery) ([]Version, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	owner, kind, err := normalizeOwnerKind(value.Owner, value.ResourceType)
+	if err != nil {
+		return nil, err
+	}
+	key := strings.TrimSpace(value.ResourceKey)
+	if key == "" {
+		return nil, &Error{StatusCode: 400, Code: "metadata.definition_version_query_invalid"}
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).
+		Columns("id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at").
+		Where(query.And(
+			query.Equal("installation_id", s.installationID), query.Equal("owner", owner),
+			query.Equal("kind", kind), query.Equal("definition_key", key),
+		)).
+		OrderBy(query.Descending("created_at"), query.Descending("id")).Build()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := ExecutorFromContext(ctx, s.database).QueryContext(ctx, statement, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	versions := []Version{}
+	for rows.Next() {
+		var value Version
+		var payload string
+		if err := rows.Scan(&value.ID, &value.Owner, &value.ResourceType, &value.ResourceKey, &value.SchemaVersion, &value.SchemaHash, &payload, &value.CreatedAt); err != nil {
+			return nil, err
+		}
+		value.Payload = json.RawMessage(payload)
+		versions = append(versions, value)
+	}
+	return versions, rows.Err()
+}
+
 func revisionConflict() error {
 	return &Error{StatusCode: 409, Code: "metadata.definition_revision_conflict"}
 }
