@@ -18,6 +18,11 @@ type RecordErasure struct {
 	IdempotencyKey string
 }
 
+type RecordLocator struct {
+	ID          string
+	WorkspaceID string
+}
+
 func (s *SQLStore) ListSubjectRecords(ctx context.Context, workspaceID, subjectID string, resources []SubjectResource, limit int, forUpdate bool) ([]Record, error) {
 	if err := s.validate(); err != nil {
 		return nil, err
@@ -152,6 +157,43 @@ func (s *SQLStore) ListExpiredRecords(ctx context.Context, filter RecordFilter, 
 		value, scanErr := scanRecord(rows)
 		if scanErr != nil {
 			return nil, scanErr
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
+}
+
+func (s *SQLStore) ListExpiredRecordLocators(ctx context.Context, filter RecordFilter, now, protectedStatus string, limit int) ([]RecordLocator, error) {
+	if err := s.validate(); err != nil {
+		return nil, err
+	}
+	predicate, err := recordPredicate(filter)
+	if err != nil {
+		return nil, err
+	}
+	now, protectedStatus = strings.TrimSpace(now), strings.TrimSpace(protectedStatus)
+	if now == "" || protectedStatus == "" {
+		return nil, fmt.Errorf("operation expiry boundary and protected status are required")
+	}
+	if limit <= 0 || limit > 5000 {
+		limit = 500
+	}
+	predicate = and(predicate, query.NotEqual("expires_at", ""), query.LessThanOrEqual("expires_at", now), query.NotEqual("status", protectedStatus))
+	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Columns("id", "workspace_id").Where(predicate).
+		OrderBy(query.Ascending("expires_at"), query.Ascending("id")).Limit(limit).Build()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := ExecutorFromContext(ctx, s.database).QueryContext(ctx, statement, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []RecordLocator{}
+	for rows.Next() {
+		var value RecordLocator
+		if err := rows.Scan(&value.ID, &value.WorkspaceID); err != nil {
+			return nil, err
 		}
 		values = append(values, value)
 	}

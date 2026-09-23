@@ -118,6 +118,37 @@ type RecordPage struct {
 	Summary RecordSummary
 }
 
+func (s *SQLStore) SummarizeRecords(ctx context.Context, filter RecordFilter) (RecordSummary, error) {
+	if err := s.validate(); err != nil {
+		return RecordSummary{}, err
+	}
+	predicate, err := recordPredicate(filter)
+	if err != nil {
+		return RecordSummary{}, err
+	}
+	statement, arguments, err := recordSelect(s, filter.WorkspaceID).
+		Projections(query.Project(query.Column("status")), query.Project(query.CountAll())).
+		Where(predicate).GroupBy(query.Column("status")).Build()
+	if err != nil {
+		return RecordSummary{}, err
+	}
+	rows, err := ExecutorFromContext(ctx, s.database).QueryContext(ctx, statement, arguments...)
+	if err != nil {
+		return RecordSummary{}, err
+	}
+	defer rows.Close()
+	summary := RecordSummary{Statuses: map[string]int{}, FailureClasses: map[string]int{}}
+	for rows.Next() {
+		var status string
+		var count int
+		if err := rows.Scan(&status, &count); err != nil {
+			return RecordSummary{}, err
+		}
+		summary.Statuses[status] += count
+	}
+	return summary, rows.Err()
+}
+
 type LeaseCounts struct {
 	Live    int64
 	Expired int64
