@@ -225,8 +225,15 @@ func (s *Store) ClaimLease(ctx context.Context, executor DBTX, claim LeaseClaim)
 	if err != nil || changed != 1 {
 		return Scope{}, false, err
 	}
-	value, found, err := s.Get(ctx, executor, claim.Identity)
-	return value, found, err
+	lookup, lookupArgs, err := query.NewSelectBuilder(s.dialect, TableName).Columns("fencing_token").Where(identityPredicate(claim.Identity)).Build()
+	if err != nil {
+		return Scope{}, false, err
+	}
+	value := Scope{Identity: claim.Identity, LeaseOwner: claim.LeaseOwner, LeaseExpiresAt: expires, LastStartedAt: now, UpdatedAt: now}
+	if err := executor.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&value.FencingToken); err != nil {
+		return Scope{}, false, err
+	}
+	return value, true, nil
 }
 
 func (s *Store) CompleteLease(ctx context.Context, executor Executor, completion LeaseCompletion) (bool, error) {
@@ -299,6 +306,31 @@ func (s *Store) Get(ctx context.Context, source Queryer, identity Identity) (Sco
 	value, err := scanScope(s.queryer(source).QueryRowContext(ctx, statement, args...))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Scope{}, false, nil
+	}
+	return value, err == nil, err
+}
+
+func (s *Store) LeaseStatus(ctx context.Context, source Queryer, identity Identity) (LeaseStatus, bool, error) {
+	if err := s.validate(); err != nil {
+		return LeaseStatus{}, false, err
+	}
+	identity = identity.normalized()
+	if err := identity.validate(); err != nil {
+		return LeaseStatus{}, false, err
+	}
+	statement, args, err := query.NewSelectBuilder(s.dialect, TableName).Columns(
+		"lease_owner", "lease_expires_at", "fencing_token", "last_started_at", "last_completed_at", "checkpoint", "last_error",
+	).Where(identityPredicate(identity)).Build()
+	if err != nil {
+		return LeaseStatus{}, false, err
+	}
+	var value LeaseStatus
+	err = s.queryer(source).QueryRowContext(ctx, statement, args...).Scan(
+		&value.LeaseOwner, &value.LeaseExpiresAt, &value.FencingToken, &value.LastStartedAt,
+		&value.LastCompletedAt, &value.Checkpoint, &value.LastError,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return LeaseStatus{}, false, nil
 	}
 	return value, err == nil, err
 }

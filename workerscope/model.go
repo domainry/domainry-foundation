@@ -130,6 +130,16 @@ type LeaseCounts struct {
 	Expired int64
 }
 
+type LeaseStatus struct {
+	LeaseOwner      string
+	LeaseExpiresAt  string
+	FencingToken    int64
+	LastStartedAt   string
+	LastCompletedAt string
+	Checkpoint      int64
+	LastError       string
+}
+
 type LeaseRelease struct {
 	Identity
 	ExpectedLeaseOwner   string
