@@ -280,7 +280,7 @@ func (s *SQLStore) PutControl(ctx context.Context, value Control, expectedRevisi
 	if err := value.Validate(); err != nil {
 		return false, err
 	}
-	if expectedRevision < 0 || value.Revision != expectedRevision+1 {
+	if expectedRevision < 0 || value.Revision < 1 {
 		return false, fmt.Errorf("operation control revision is invalid")
 	}
 	executor := ExecutorFromContext(ctx, s.database)
