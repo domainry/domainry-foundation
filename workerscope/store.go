@@ -357,17 +357,29 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 	}
 	release.Identity = release.Identity.normalized()
 	release.ExpectedLeaseOwner = strings.TrimSpace(release.ExpectedLeaseOwner)
-	if err := release.Identity.validate(); err != nil {
-		return LeaseReleaseResult{}, false, err
-	}
-	if release.ExpectedLeaseOwner == "" || release.ExpectedFencingToken < 1 || release.Now.IsZero() {
+	if release.Identity.ID == "" || release.Identity.Owner == "" || release.ExpectedLeaseOwner == "" || release.ExpectedFencingToken < 1 || release.Now.IsZero() {
 		return LeaseReleaseResult{}, false, fmt.Errorf("worker scope lease release is invalid")
 	}
-	value, found, err := s.Get(ctx, executor, release.Identity)
-	if err != nil || !found || value.LeaseOwner != release.ExpectedLeaseOwner || value.FencingToken != release.ExpectedFencingToken {
+	if _, found := RegistrationFor(release.Identity.Owner); !found {
+		return LeaseReleaseResult{}, false, fmt.Errorf("worker scope owner %q is not registered", release.Identity.Owner)
+	}
+	predicate := releaseIdentityPredicate(release.Identity)
+	statement, args, err := query.NewSelectBuilder(s.dialect, TableName).
+		Columns("lease_owner", "lease_expires_at", "fencing_token").Where(predicate).Build()
+	if err != nil {
 		return LeaseReleaseResult{}, false, err
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, value.LeaseExpiresAt)
+	var currentOwner, currentExpiresAt string
+	var currentToken int64
+	if err := executor.QueryRowContext(ctx, statement, args...).Scan(&currentOwner, &currentExpiresAt, &currentToken); errors.Is(err, sql.ErrNoRows) {
+		return LeaseReleaseResult{}, false, nil
+	} else if err != nil {
+		return LeaseReleaseResult{}, false, err
+	}
+	if currentOwner != release.ExpectedLeaseOwner || currentToken != release.ExpectedFencingToken {
+		return LeaseReleaseResult{}, false, nil
+	}
+	expiresAt, err := time.Parse(time.RFC3339Nano, currentExpiresAt)
 	if err != nil {
 		return LeaseReleaseResult{}, false, fmt.Errorf("worker scope lease expiry is invalid: %w", err)
 	}
@@ -378,11 +390,11 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 		}
 		eligibility = "verified_stuck"
 	}
-	statement, args, err := query.NewUpdateBuilder(s.dialect, TableName).
+	statement, args, err = query.NewUpdateBuilder(s.dialect, TableName).
 		Set("lease_owner", "").Set("lease_expires_at", "").
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).
 		Set("updated_at", timestamp(release.Now)).
-		Where(leasePredicate(release.Identity, release.ExpectedLeaseOwner, release.ExpectedFencingToken)).Build()
+		Where(query.And(predicate, query.Equal("lease_owner", release.ExpectedLeaseOwner), query.Equal("fencing_token", release.ExpectedFencingToken))).Build()
 	if err != nil {
 		return LeaseReleaseResult{}, false, err
 	}
@@ -395,13 +407,21 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 		return LeaseReleaseResult{}, false, err
 	}
 	return LeaseReleaseResult{
-		PreviousLeaseOwner: value.LeaseOwner, PreviousFencingToken: value.FencingToken,
-		NextFencingToken: value.FencingToken + 1, PreviousLeaseExpiresAt: expiresAt, Eligibility: eligibility,
+		PreviousLeaseOwner: currentOwner, PreviousFencingToken: currentToken,
+		NextFencingToken: currentToken + 1, PreviousLeaseExpiresAt: expiresAt, Eligibility: eligibility,
 	}, true, nil
 }
 
 func identityPredicate(identity Identity) query.Predicate {
 	return query.And(query.Equal("id", identity.ID), query.Equal("owner", identity.Owner), query.Equal("scope_key", identity.ScopeKey))
+}
+
+func releaseIdentityPredicate(identity Identity) query.Predicate {
+	predicate := query.Predicate(query.And(query.Equal("id", identity.ID), query.Equal("owner", identity.Owner)))
+	if identity.ScopeKey != "" {
+		predicate = query.And(predicate, query.Equal("scope_key", identity.ScopeKey))
+	}
+	return predicate
 }
 
 func leasePredicate(identity Identity, owner string, fencingToken int64) query.Predicate {
