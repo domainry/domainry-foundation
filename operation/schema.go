@@ -17,6 +17,8 @@ const (
 	BreakGlassTableName = "_operation_break_glass_grants"
 	MigrationOwner      = "shared/operations"
 	compositeKeyLength  = 128
+	statusKeyLength     = 64
+	timestampKeyLength  = 40
 )
 
 type Database = sqlhost.Database
@@ -97,13 +99,13 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("owner", ormschema.TextKey(compositeKeyLength)), required("kind", ormschema.TextKey(compositeKeyLength)), required("action_key", ormschema.TextKey(255)),
 		defaulted("parent_id", ormschema.TextKey(255), ""), required("resource_type", ormschema.TextKey(255)), defaulted("resource_id", ormschema.TextKey(255), ""),
 		required("idempotency_key", ormschema.TextKey(compositeKeyLength)), required("request_fingerprint", ormschema.TextKey(255)), required("requested_by", ormschema.TextKey(255)),
-		required("reason", ormschema.LongText()), defaulted("reference", ormschema.TextKey(255), ""), required("status", ormschema.TextKey(191)),
+		required("reason", ormschema.LongText()), defaulted("reference", ormschema.TextKey(255), ""), required("status", ormschema.TextKey(statusKeyLength)),
 		required("status_url", ormschema.LongText()), required("result_json", ormschema.LongText()), required("metadata_json", ormschema.LongText()),
 		defaulted("error_code", ormschema.TextKey(255), ""), defaulted("failure_class", ormschema.TextKey(255), ""), required("next_action", ormschema.LongText()),
 		required("related_ids_json", ormschema.LongText()), defaulted("correlation", ormschema.TextKey(255), ""), required("evidence_json", ormschema.LongText()),
-		defaulted("lease_owner", ormschema.TextKey(255), ""), defaulted("lease_expires_at", ormschema.TextKey(191), ""), defaulted("fencing_token", ormschema.BigInt(), 0),
-		defaulted("expires_at", ormschema.TextKey(191), ""), required("created_at", ormschema.TextKey(191)), defaulted("started_at", ormschema.TextKey(255), ""),
-		defaulted("finished_at", ormschema.TextKey(255), ""), required("updated_at", ormschema.TextKey(191)),
+		defaulted("lease_owner", ormschema.TextKey(255), ""), defaulted("lease_expires_at", ormschema.TextKey(timestampKeyLength), ""), defaulted("fencing_token", ormschema.BigInt(), 0),
+		defaulted("expires_at", ormschema.TextKey(timestampKeyLength), ""), required("created_at", ormschema.TextKey(timestampKeyLength)), defaulted("started_at", ormschema.TextKey(timestampKeyLength), ""),
+		defaulted("finished_at", ormschema.TextKey(timestampKeyLength), ""), required("updated_at", ormschema.TextKey(timestampKeyLength)),
 	).PrimaryKey("id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", TableName, err)

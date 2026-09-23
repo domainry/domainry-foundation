@@ -80,6 +80,9 @@ func TestOperationsMySQLMigrationDoesNotDefaultTextColumns(t *testing.T) {
 	if count := strings.Count(joined, "VARCHAR(128)"); count < 4 {
 		t.Fatalf("Operations MySQL migration has %d bounded composite-key columns, want at least 4", count)
 	}
+	if !strings.Contains(joined, "VARCHAR(64)") || !strings.Contains(joined, "VARCHAR(40)") {
+		t.Fatal("Operations MySQL migration does not bound indexed status and timestamp columns")
+	}
 }
 
 type minimalRenderer struct{}
