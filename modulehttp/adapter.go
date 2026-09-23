@@ -164,14 +164,6 @@ func ValidateAuthorizationProjection(definitions []actioncontract.ActionDefiniti
 	return nil
 }
 
-// OpenAPIProvider is implemented by an Adapter that owns full OpenAPI
-// operations for its declared routes. Keys are exact Route.Pattern values and
-// values are OpenAPI operation objects. The host validates route ownership and
-// merges copies into its process document.
-type OpenAPIProvider interface {
-	OpenAPIOperations() map[string]map[string]any
-}
-
 // ValidateAdapter rejects incomplete and ambient-authority declarations before
 // the embedding host adds any route to a listener.
 func ValidateAdapter(adapter Adapter) error {
@@ -201,16 +193,6 @@ func ValidateAdapter(adapter Adapter) error {
 			return fmt.Errorf("module HTTP adapter %q/%q declares route %q more than once", owner, name, pattern)
 		}
 		seen[pattern] = true
-	}
-	if provider, ok := adapter.(OpenAPIProvider); ok {
-		for pattern, operation := range provider.OpenAPIOperations() {
-			if !seen[strings.TrimSpace(pattern)] {
-				return fmt.Errorf("module HTTP adapter %q/%q publishes OpenAPI for undeclared route %q", owner, name, pattern)
-			}
-			if len(operation) == 0 || strings.TrimSpace(stringValue(operation["operationId"])) == "" {
-				return fmt.Errorf("module HTTP adapter %q/%q route %q has incomplete OpenAPI", owner, name, pattern)
-			}
-		}
 	}
 	return nil
 }
@@ -262,9 +244,4 @@ func RouteFromAction(definition actioncontract.ActionDefinition) (Route, error) 
 		return Route{}, fmt.Errorf("action %q has no HTTP binding", definition.Key)
 	}
 	return Route{Action: definition}, nil
-}
-
-func stringValue(value any) string {
-	text, _ := value.(string)
-	return text
 }

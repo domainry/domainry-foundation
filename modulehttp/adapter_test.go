@@ -76,16 +76,14 @@ func TestValidateAdapterRejectsDuplicateRoutes(t *testing.T) {
 	}
 }
 
-func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
+func TestValidateRouteGovernance(t *testing.T) {
 	action := principalActionTestDefinition()
 	action.Key, action.OperationKey, action.OperationLabel, action.Label = "reports.snapshots.refresh", "refresh", "Refresh", "Refresh report snapshot"
 	action.HTTP = &actioncontract.HTTPBinding{Method: "POST", RouteTemplate: "/report/{reportKey}/snapshots/refresh"}
 	action.EffectClass, action.RiskLevel = actioncontract.EffectWrite, actioncontract.RiskMedium
 	action.IdempotencyDecision, action.AuditClass = "caller_key_required", "mutation_audit_required"
 	route := mustTestRoute(t, action)
-	adapter := governedTestAdapter{testAdapter: testAdapter{contract: ContractVersion, owner: "report", name: "reports", handler: http.NotFoundHandler(), routes: []Route{route}}, operations: map[string]map[string]any{
-		route.Pattern(): {"operationId": "refreshReportSnapshot"},
-	}}
+	adapter := testAdapter{contract: ContractVersion, owner: "report", name: "reports", handler: http.NotFoundHandler(), routes: []Route{route}}
 	if err := ValidateAdapter(adapter); err != nil {
 		t.Fatalf("validate governed adapter: %v", err)
 	}
@@ -96,10 +94,6 @@ func TestValidateRouteGovernanceAndOwnedOpenAPI(t *testing.T) {
 		t.Fatalf("unexpected governance error: %v", err)
 	}
 
-	adapter.operations = map[string]map[string]any{"GET /unknown": {"operationId": "unknown"}}
-	if err := ValidateAdapter(adapter); err == nil || !strings.Contains(err.Error(), "undeclared route") {
-		t.Fatalf("unexpected OpenAPI ownership error: %v", err)
-	}
 }
 
 func TestRouteFromCanonicalActionIsLosslessForSupportedStrategies(t *testing.T) {
@@ -264,14 +258,4 @@ func mutateTestRoute(definition actioncontract.ActionDefinition, mutate func(*ac
 	return Route{Action: definition}
 }
 
-type governedTestAdapter struct {
-	testAdapter
-	operations map[string]map[string]any
-}
-
-func (adapter governedTestAdapter) OpenAPIOperations() map[string]map[string]any {
-	return adapter.operations
-}
-
 var _ Adapter = testAdapter{}
-var _ OpenAPIProvider = governedTestAdapter{}
