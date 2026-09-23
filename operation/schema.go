@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	TableName        = "_operations"
-	ControlTableName = "_operation_controls"
-	MigrationOwner   = "shared/operations"
+	TableName           = "_operations"
+	ControlTableName    = "_operation_controls"
+	BreakGlassTableName = "_operation_break_glass_grants"
+	MigrationOwner      = "shared/operations"
 )
 
 type Database = sqlhost.Database
@@ -85,7 +86,18 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", ControlTableName, err)
 	}
-	statements := []string{operations, controls}
+	breakGlass, _, err := ormschema.NewTable(renderer, BreakGlassTableName).IfNotExists().Columns(
+		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), required("state", ormschema.TextKey(191)),
+		required("actor_id", ormschema.TextKey(255)), required("approver_ids_json", ormschema.LongText()), required("reason", ormschema.LongText()),
+		required("incident_ref", ormschema.TextKey(255)), required("alert_target", ormschema.TextKey(255)), required("audit_event_id", ormschema.TextKey(255)),
+		required("expires_at", ormschema.TextKey(40)), required("revision", ormschema.BigInt()), required("created_at", ormschema.TextKey(40)),
+		required("updated_at", ormschema.TextKey(40)), defaulted("revoked_at", ormschema.TextKey(40), ""),
+		defaulted("revoked_by", ormschema.TextKey(255), ""), defaulted("revocation_note", ormschema.LongText(), ""),
+	).PrimaryKey("id").Build()
+	if err != nil {
+		return nil, fmt.Errorf("build %s: %w", BreakGlassTableName, err)
+	}
+	statements := []string{operations, controls, breakGlass}
 	indexes := []struct {
 		name, table string
 		unique      bool
@@ -98,6 +110,8 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		{"idx_runtime_operation_expiry", TableName, false, []string{"workspace_id", "owner", "kind", "status", "expires_at"}},
 		{"uniq_runtime_operation_control", ControlTableName, true, []string{"system_purpose", "control_kind", "owner"}},
 		{"idx_runtime_operation_control_state", ControlTableName, false, []string{"system_purpose", "control_kind", "state"}},
+		{"idx_runtime_break_glass_active", BreakGlassTableName, false, []string{"workspace_id", "state", "expires_at"}},
+		{"uniq_runtime_break_glass_audit", BreakGlassTableName, true, []string{"workspace_id", "audit_event_id"}},
 	}
 	for _, value := range indexes {
 		builder := ormschema.NewIndex(renderer, value.name, value.table).Columns(value.columns...)
@@ -121,4 +135,4 @@ func defaulted(name string, kind ormschema.ColumnType, value any) ormschema.Colu
 	return ormschema.Column(name, kind).NotNull().DefaultValue(value)
 }
 
-func OwnedTables() []string { return []string{TableName, ControlTableName} }
+func OwnedTables() []string { return []string{TableName, ControlTableName, BreakGlassTableName} }

@@ -2,6 +2,8 @@ package operation
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -45,5 +47,21 @@ func TestRecordFilterValidatesExactJSONCAS(t *testing.T) {
 	filter.ResultJSON = json.RawMessage(`{`)
 	if _, err := recordPredicate(filter); err == nil {
 		t.Fatal("record filter accepted invalid exact-result JSON")
+	}
+}
+
+func TestOperationsKernelOwnsBreakGlassSchema(t *testing.T) {
+	if !slices.Contains(OwnedTables(), BreakGlassTableName) {
+		t.Fatal("break-glass table is not owned by the Operations kernel")
+	}
+	migrations, err := SchemaMigrations("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(migrations[0].Statements, "\n")
+	for _, required := range []string{BreakGlassTableName, "idx_runtime_break_glass_active", "uniq_runtime_break_glass_audit"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("Operations migration is missing %s", required)
+		}
 	}
 }
