@@ -33,3 +33,17 @@ func TestCommandAndCompletionRequireClosedSharedLedgerIdentity(t *testing.T) {
 		t.Fatal("completion accepted invalid JSON")
 	}
 }
+
+func TestRecordFilterValidatesExactJSONCAS(t *testing.T) {
+	filter := RecordFilter{
+		WorkspaceID: "workspace-a", ID: "operation-1",
+		ResultJSON: json.RawMessage(`{"payload":"frozen"}`), MetadataJSON: json.RawMessage(`{"caller":"hashed"}`),
+	}
+	if _, err := recordPredicate(filter); err != nil {
+		t.Fatal(err)
+	}
+	filter.ResultJSON = json.RawMessage(`{`)
+	if _, err := recordPredicate(filter); err == nil {
+		t.Fatal("record filter accepted invalid exact-result JSON")
+	}
+}

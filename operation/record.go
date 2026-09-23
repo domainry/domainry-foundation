@@ -68,6 +68,8 @@ type RecordFilter struct {
 	ResourceID             string
 	RequestedBy            string
 	Correlation            string
+	ResultJSON             json.RawMessage
+	MetadataJSON           json.RawMessage
 	CreatedFrom            string
 	CreatedTo              string
 	Search                 string
@@ -81,6 +83,9 @@ type RecordFilter struct {
 }
 
 type RecordChanges struct {
+	ID                    *string
+	RequestFingerprint    *string
+	RequestedBy           *string
 	Status                *string
 	Reason                *string
 	Reference             *string
@@ -312,6 +317,21 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 		assignments++
 		return nil
 	}
+	for _, required := range []struct {
+		name  string
+		value *string
+	}{
+		{name: "id", value: changes.ID},
+		{name: "request fingerprint", value: changes.RequestFingerprint},
+		{name: "requested by", value: changes.RequestedBy},
+	} {
+		if required.value != nil && strings.TrimSpace(*required.value) == "" {
+			return false, fmt.Errorf("operation record patch %s is required", required.name)
+		}
+	}
+	setString("id", changes.ID)
+	setString("request_fingerprint", changes.RequestFingerprint)
+	setString("requested_by", changes.RequestedBy)
 	setString("status", changes.Status)
 	setString("reason", changes.Reason)
 	setString("reference", changes.Reference)
@@ -508,6 +528,22 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	addExact("requested_by", filter.RequestedBy)
 	addExact("correlation", filter.Correlation)
 	addExact("lease_owner", filter.LeaseOwner)
+	addJSONExact := func(column string, value json.RawMessage) error {
+		if value == nil {
+			return nil
+		}
+		if !json.Valid(value) {
+			return fmt.Errorf("operation record filter %s JSON is invalid", column)
+		}
+		predicate = and(predicate, query.Equal(column, string(value)))
+		return nil
+	}
+	if err := addJSONExact("result_json", filter.ResultJSON); err != nil {
+		return nil, err
+	}
+	if err := addJSONExact("metadata_json", filter.MetadataJSON); err != nil {
+		return nil, err
+	}
 	if len(filter.Statuses) != 0 {
 		values := make([]any, 0, len(filter.Statuses))
 		for _, status := range filter.Statuses {
