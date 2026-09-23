@@ -74,6 +74,7 @@ type RecordFilter struct {
 	LeaseOwner             string
 	FencingToken           *int64
 	LeaseExpiresAtOrBefore string
+	LeaseExpiresAfter      string
 	Limit                  int
 }
 
@@ -521,6 +522,9 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	}
 	if value := strings.TrimSpace(filter.LeaseExpiresAtOrBefore); value != "" {
 		predicate = and(predicate, query.LessThanOrEqual("lease_expires_at", value))
+	}
+	if value := strings.TrimSpace(filter.LeaseExpiresAfter); value != "" {
+		predicate = and(predicate, query.GreaterThan("lease_expires_at", value))
 	}
 	if value := strings.TrimSpace(filter.CreatedFrom); value != "" {
 		predicate = and(predicate, query.GreaterThanOrEqual("created_at", value))
