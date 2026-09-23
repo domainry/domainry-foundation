@@ -75,6 +75,8 @@ type RecordFilter struct {
 	FencingToken           *int64
 	LeaseExpiresAtOrBefore string
 	LeaseExpiresAfter      string
+	ReclaimableStatus      string
+	ExpiredLeaseStatus     string
 	Limit                  int
 }
 
@@ -520,11 +522,21 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	if filter.FencingToken != nil {
 		predicate = and(predicate, query.Equal("fencing_token", *filter.FencingToken))
 	}
-	if value := strings.TrimSpace(filter.LeaseExpiresAtOrBefore); value != "" {
+	if value := strings.TrimSpace(filter.LeaseExpiresAtOrBefore); value != "" && strings.TrimSpace(filter.ReclaimableStatus) == "" && strings.TrimSpace(filter.ExpiredLeaseStatus) == "" {
 		predicate = and(predicate, query.LessThanOrEqual("lease_expires_at", value))
 	}
 	if value := strings.TrimSpace(filter.LeaseExpiresAfter); value != "" {
 		predicate = and(predicate, query.GreaterThan("lease_expires_at", value))
+	}
+	if reclaimable, leased := strings.TrimSpace(filter.ReclaimableStatus), strings.TrimSpace(filter.ExpiredLeaseStatus); reclaimable != "" || leased != "" {
+		expiredAt := strings.TrimSpace(filter.LeaseExpiresAtOrBefore)
+		if reclaimable == "" || leased == "" || expiredAt == "" {
+			return nil, fmt.Errorf("operation record reclaim filter requires both statuses and lease expiry")
+		}
+		predicate = and(predicate, query.Or(
+			query.Equal("status", reclaimable),
+			query.And(query.Equal("status", leased), query.LessThanOrEqual("lease_expires_at", expiredAt)),
+		))
 	}
 	if value := strings.TrimSpace(filter.CreatedFrom); value != "" {
 		predicate = and(predicate, query.GreaterThanOrEqual("created_at", value))
