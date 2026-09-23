@@ -452,7 +452,7 @@ func (s *SQLStore) ListControls(ctx context.Context, purpose, kind string, limit
 }
 
 func (value Record) validate() error {
-	for _, field := range []string{value.ID, value.Owner, value.Kind, value.ActionKey, value.ResourceType, value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Status, value.CreatedAt, value.UpdatedAt} {
+	for _, field := range []string{value.ID, value.Owner, value.Kind, value.ActionKey, value.ResourceType, value.IdempotencyKey, value.RequestFingerprint, value.Status, value.CreatedAt, value.UpdatedAt} {
 		if strings.TrimSpace(field) == "" {
 			return fmt.Errorf("operation record required fields are missing")
 		}
