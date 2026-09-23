@@ -496,13 +496,19 @@ func optionalTime(value time.Time) string {
 }
 
 func SchemaMigrationForDialect(renderer Dialect) (SchemaMigration, error) {
+	const (
+		indexedKeyLength       = 96
+		storageReferenceLength = 384
+		digestLength           = 64
+		timestampLength        = 40
+	)
 	migration := SchemaMigration{Version: 1, Name: "shared_artifacts"}
 	tables := []*ormschema.TableBuilder{
 		ormschema.NewTable(renderer, TableName).IfNotExists().Columns(
-			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(255)), required("owner", ormschema.TextKey(191)), required("kind", ormschema.TextKey(191)), required("idempotency_key", ormschema.TextKey(191)), required("created_by", ormschema.TextKey(255)), ormschema.Column("owner_org_id", ormschema.TextKey(255)).NotNull().DefaultValue(""), required("filename", ormschema.Text()), required("media_type", ormschema.TextKey(255)), required("content_sha256", ormschema.TextKey(255)), required("size_bytes", ormschema.BigInt()), required("storage_reference", ormschema.Text()), required("status", ormschema.TextKey(64)), ormschema.Column("expires_at", ormschema.TextKey(255)).NotNull().DefaultValue(""), required("scan_status", ormschema.TextKey(64)), ormschema.Column("download_token_sha256", ormschema.TextKey(255)).NotNull().DefaultValue(""), ormschema.Column("authorization_scope_sha256", ormschema.TextKey(255)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.TextKey(255)), required("updated_at", ormschema.TextKey(255)),
+			required("workspace_id", ormschema.TextKey(indexedKeyLength)), required("id", ormschema.TextKey(indexedKeyLength)), required("owner", ormschema.TextKey(indexedKeyLength)), required("kind", ormschema.TextKey(indexedKeyLength)), required("idempotency_key", ormschema.TextKey(indexedKeyLength)), required("created_by", ormschema.TextKey(indexedKeyLength)), ormschema.Column("owner_org_id", ormschema.TextKey(indexedKeyLength)).NotNull().DefaultValue(""), required("filename", ormschema.Text()), required("media_type", ormschema.TextKey(255)), required("content_sha256", ormschema.TextKey(digestLength)), required("size_bytes", ormschema.BigInt()), required("storage_reference", ormschema.TextKey(storageReferenceLength)), required("status", ormschema.TextKey(64)), ormschema.Column("expires_at", ormschema.TextKey(timestampLength)).NotNull().DefaultValue(""), required("scan_status", ormschema.TextKey(64)), ormschema.Column("download_token_sha256", ormschema.TextKey(digestLength)).NotNull().DefaultValue(""), ormschema.Column("authorization_scope_sha256", ormschema.TextKey(digestLength)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.TextKey(timestampLength)), required("updated_at", ormschema.TextKey(timestampLength)),
 		).PrimaryKey("id").Unique("workspace_id", "owner", "kind", "idempotency_key").Unique("workspace_id", "owner", "kind", "storage_reference"),
 		ormschema.NewTable(renderer, BindingTableName).IfNotExists().Columns(
-			required("workspace_id", ormschema.TextKey(191)), required("id", ormschema.TextKey(255)), required("artifact_id", ormschema.TextKey(255)), required("owner", ormschema.TextKey(191)), required("kind", ormschema.TextKey(191)), required("resource_type", ormschema.TextKey(191)), required("resource_id", ormschema.TextKey(255)), ormschema.Column("field_key", ormschema.TextKey(255)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.TextKey(255)),
+			required("workspace_id", ormschema.TextKey(indexedKeyLength)), required("id", ormschema.TextKey(indexedKeyLength)), required("artifact_id", ormschema.TextKey(indexedKeyLength)), required("owner", ormschema.TextKey(indexedKeyLength)), required("kind", ormschema.TextKey(indexedKeyLength)), required("resource_type", ormschema.TextKey(indexedKeyLength)), required("resource_id", ormschema.TextKey(indexedKeyLength)), ormschema.Column("field_key", ormschema.TextKey(indexedKeyLength)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.TextKey(timestampLength)),
 		).PrimaryKey("id").Unique("workspace_id", "artifact_id", "owner", "kind", "resource_type", "resource_id", "field_key"),
 	}
 	for _, table := range tables {

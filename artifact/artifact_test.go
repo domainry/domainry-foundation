@@ -56,3 +56,17 @@ func TestArtifactKernelOwnsCanonicalSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestArtifactMySQLMigrationUsesIndexableColumnTypes(t *testing.T) {
+	migrations, err := SchemaMigrations("mysql", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.ToUpper(strings.Join(migrations[0].Statements, "\n"))
+	if strings.Contains(joined, "`STORAGE_REFERENCE` TEXT") {
+		t.Fatal("Artifact MySQL migration indexes an unbounded storage reference")
+	}
+	if count := strings.Count(joined, "VARCHAR(96)"); count < 8 {
+		t.Fatalf("Artifact MySQL migration has %d bounded composite-key columns, want at least 8", count)
+	}
+}
