@@ -1,6 +1,9 @@
 package schemaownership_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +16,54 @@ import (
 	"github.com/domainry/domainry-foundation/workerscope"
 	ormmigration "github.com/domainry/domainry-orm/migration"
 )
+
+func TestFoundationPublishedMySQLMigrationChecksumsAreStable(t *testing.T) {
+	sources := []struct {
+		name       string
+		migrations func(string, string) ([]ormmigration.Migration, error)
+		checksum   string
+	}{
+		{"definitions", definition.SchemaMigrations, "85440c2dd24922d8850bb1e76072dfe547f70cfe8cbbc16b03d24d121b28d4af"},
+		{"operations", operation.SchemaMigrations, "55051fe2feebada37624cc3f96aa92d4214f872a8d7059b5e84bcbc42426a1b9"},
+		{"artifacts", artifact.SchemaMigrations, "06a6035bfa4c7b88cc8a88867a2dae81c0a72b8c7c6afa1770d8a9a0d0c2d5ec"},
+		{"subject lifecycle", subjectlifecycle.SchemaMigrations, "81e7cbab1b5c40b76754c36ae27550357fcd0f40ec50a14f1104d53689fa04ab"},
+		{"worker scopes", workerscope.SchemaMigrations, "55e005310c1305d7d25b3df96bdcaf6375d78f88e174a029895a111cf4d524dc"},
+	}
+	for _, source := range sources {
+		t.Run(source.name, func(t *testing.T) {
+			migrations, err := source.migrations("mysql", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(migrations) == 0 {
+				t.Fatal("missing published migration")
+			}
+			if got := runtimeOwnedMigrationChecksum(migrations[0]); got != source.checksum {
+				t.Fatalf("published migration checksum=%s want=%s", got, source.checksum)
+			}
+		})
+	}
+}
+
+func runtimeOwnedMigrationChecksum(migration ormmigration.Migration) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "%d\x00%s\x00", migration.Version, strings.TrimSpace(migration.Name))
+	for _, statement := range migration.Statements {
+		_, _ = fmt.Fprintf(hash, "%s\x00", statement)
+	}
+	if migration.Baseline != nil {
+		for _, table := range migration.Baseline.Tables {
+			_, _ = fmt.Fprintf(hash, "table\x00%s\x00", table.Name)
+			for _, column := range table.Columns {
+				_, _ = fmt.Fprintf(hash, "column\x00%s\x00%s\x00%t\x00%t\x00", column.Name, column.Type, column.Nullable, column.PrimaryKey)
+			}
+			for _, index := range table.Indexes {
+				_, _ = fmt.Fprintf(hash, "index\x00%s\x00%t\x00%s\x00", index.Name, index.Unique, strings.Join(index.Columns, ","))
+			}
+		}
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
 
 func TestEveryFoundationTableHasOneValidOwnershipContract(t *testing.T) {
 	groups := []struct {

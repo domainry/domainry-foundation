@@ -2,6 +2,9 @@ package subjectlifecycle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +58,25 @@ func TestMySQLSubjectLifecycleUsesBoundedCompositeKeys(t *testing.T) {
 	if count := strings.Count(joined, "VARCHAR(128)"); count < 10 {
 		t.Fatalf("Subject Lifecycle MySQL migration has %d bounded key columns, want at least 10", count)
 	}
+}
+
+func TestMySQLPublishedSubjectLifecycleMigrationChecksumIsStable(t *testing.T) {
+	migrations, err := SchemaMigrations("mysql", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := runtimeOwnedMigrationChecksum(migrations[0]), "81e7cbab1b5c40b76754c36ae27550357fcd0f40ec50a14f1104d53689fa04ab"; got != want {
+		t.Fatalf("published Subject Lifecycle migration checksum=%s want %s", got, want)
+	}
+}
+
+func runtimeOwnedMigrationChecksum(migration SchemaMigration) string {
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "%d\x00%s\x00", migration.Version, strings.TrimSpace(migration.Name))
+	for _, statement := range migration.Statements {
+		_, _ = fmt.Fprintf(hash, "%s\x00", statement)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
 }
 
 type recordingRegistrar struct {
