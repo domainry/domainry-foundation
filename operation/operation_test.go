@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	ormmigration "github.com/domainry/domainry-orm/migration"
 )
 
 func TestCommandAndCompletionRequireClosedSharedLedgerIdentity(t *testing.T) {
@@ -82,6 +84,16 @@ func TestOperationsMySQLMigrationDoesNotDefaultTextColumns(t *testing.T) {
 	}
 	if !strings.Contains(joined, "VARCHAR(64)") || !strings.Contains(joined, "VARCHAR(40)") {
 		t.Fatal("Operations MySQL migration does not bound indexed status and timestamp columns")
+	}
+}
+
+func TestOperationsMySQLPublishedMigrationChecksumIsStable(t *testing.T) {
+	migrations, err := SchemaMigrations("mysql", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ormmigration.Checksum(migrations[0]), "ddc77655e929edbdbeaed1c1bd388749069abb3069b6e9e12bab26a7a540e959"; got != want {
+		t.Fatalf("published Operations migration checksum=%s want %s", got, want)
 	}
 }
 

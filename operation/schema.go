@@ -115,7 +115,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("system_purpose", ormschema.TextKey(255)), required("control_kind", ormschema.TextKey(255)), required("owner", ormschema.TextKey(255)),
 		required("state", ormschema.TextKey(191)), required("reason", ormschema.Text()), required("reference", ormschema.Text()),
 		required("updated_by", ormschema.Text()), required("revision", ormschema.BigInt()), required("updated_at", ormschema.Text()),
-	).PrimaryKey("system_purpose", "control_kind", "owner").Build()
+	).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", ControlTableName, err)
 	}
@@ -141,6 +141,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		{"idx_runtime_operation_parent", TableName, false, []string{"workspace_id", "parent_id", "created_at"}},
 		{"idx_runtime_operation_lease", TableName, false, []string{"owner", "status", "lease_expires_at"}},
 		{"idx_runtime_operation_expiry", TableName, false, []string{"workspace_id", "owner", "kind", "status", "expires_at"}},
+		{"uniq_runtime_operation_control", ControlTableName, true, []string{"system_purpose", "control_kind", "owner"}},
 		{"idx_runtime_operation_control_state", ControlTableName, false, []string{"system_purpose", "control_kind", "state"}},
 		{"idx_runtime_break_glass_active", BreakGlassTableName, false, []string{"workspace_id", "state", "expires_at"}},
 		{"uniq_runtime_break_glass_audit", BreakGlassTableName, true, []string{"workspace_id", "audit_event_id"}},
@@ -177,7 +178,7 @@ func SchemaOwnership() []schemaownership.Table {
 		},
 		{
 			Name: ControlTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeInstallation,
-			RetentionClass: schemaownership.RetentionInstallation, PrimaryKey: []string{"system_purpose", "control_kind", "owner"},
+			RetentionClass: schemaownership.RetentionInstallation, UniqueKey: []string{"system_purpose", "control_kind", "owner"},
 			BoundedQueryPath: "exact system_purpose/control_kind/owner identity or registered state existence check",
 			DeletionPolicy:   "current desired control state is revision-fenced and retained for the installation lifetime",
 		},

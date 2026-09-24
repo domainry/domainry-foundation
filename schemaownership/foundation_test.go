@@ -46,7 +46,7 @@ func TestEveryFoundationTableHasOneValidOwnershipContract(t *testing.T) {
 	}
 }
 
-func TestFoundationOwnershipPrimaryKeysMatchCanonicalDDL(t *testing.T) {
+func TestFoundationOwnershipIdentityKeysMatchCanonicalDDL(t *testing.T) {
 	sources := []struct {
 		name       string
 		tables     []schemaownership.Table
@@ -79,13 +79,28 @@ func TestFoundationOwnershipPrimaryKeysMatchCanonicalDDL(t *testing.T) {
 				if create == "" {
 					t.Fatalf("%s has no canonical CREATE TABLE statement", table.Name)
 				}
-				quoted := make([]string, len(table.PrimaryKey))
-				for index, column := range table.PrimaryKey {
+				identity := table.IdentityKey()
+				quoted := make([]string, len(identity))
+				for index, column := range identity {
 					quoted[index] = `"` + column + `"`
 				}
-				primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"
-				if !strings.Contains(create, primaryKey) {
-					t.Fatalf("%s declares primary key %v but DDL is %s", table.Name, table.PrimaryKey, create)
+				if len(table.PrimaryKey) > 0 {
+					primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"
+					if !strings.Contains(create, primaryKey) {
+						t.Fatalf("%s declares primary key %v but DDL is %s", table.Name, table.PrimaryKey, create)
+					}
+					continue
+				}
+				uniqueKey := "(" + strings.Join(quoted, ", ") + ")"
+				found := false
+				for _, statement := range statements {
+					if strings.HasPrefix(statement, `CREATE UNIQUE INDEX `) && strings.Contains(statement, `ON "`+table.Name+`" `) && strings.Contains(statement, uniqueKey) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("%s declares unique identity key %v but migrations are %v", table.Name, table.UniqueKey, statements)
 				}
 			}
 		})

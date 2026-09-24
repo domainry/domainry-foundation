@@ -36,7 +36,8 @@ type Table struct {
 	Owner            string         `json:"owner"`
 	WorkspaceScope   WorkspaceScope `json:"workspace_scope"`
 	RetentionClass   RetentionClass `json:"retention_class"`
-	PrimaryKey       []string       `json:"primary_key"`
+	PrimaryKey       []string       `json:"primary_key,omitempty"`
+	UniqueKey        []string       `json:"unique_key,omitempty"`
 	BoundedQueryPath string         `json:"bounded_query_path"`
 	DeletionPolicy   string         `json:"deletion_policy"`
 }
@@ -61,14 +62,17 @@ func (table Table) Validate() error {
 	default:
 		return fmt.Errorf("schema ownership retention class %q is invalid", table.RetentionClass)
 	}
-	if len(table.PrimaryKey) == 0 {
-		return fmt.Errorf("schema ownership table %s has no primary key", table.Name)
+	if len(table.PrimaryKey) == 0 && len(table.UniqueKey) == 0 {
+		return fmt.Errorf("schema ownership table %s has no physical identity key", table.Name)
+	}
+	if len(table.PrimaryKey) > 0 && len(table.UniqueKey) > 0 {
+		return fmt.Errorf("schema ownership table %s declares both primary and unique identity keys", table.Name)
 	}
 	seen := map[string]bool{}
-	for _, column := range table.PrimaryKey {
+	for _, column := range table.IdentityKey() {
 		column = strings.TrimSpace(column)
 		if !identifierPattern.MatchString(column) || seen[column] {
-			return fmt.Errorf("schema ownership table %s has invalid primary key", table.Name)
+			return fmt.Errorf("schema ownership table %s has invalid physical identity key", table.Name)
 		}
 		seen[column] = true
 	}
@@ -79,6 +83,15 @@ func (table Table) Validate() error {
 		return fmt.Errorf("schema ownership table %s has no deletion policy", table.Name)
 	}
 	return nil
+}
+
+// IdentityKey returns the physical primary key, or the canonical unique key
+// for a table whose published DDL intentionally has no primary key.
+func (table Table) IdentityKey() []string {
+	if len(table.PrimaryKey) > 0 {
+		return table.PrimaryKey
+	}
+	return table.UniqueKey
 }
 
 func ValidateAll(tables []Table) error {
@@ -108,6 +121,7 @@ func Clone(tables []Table) []Table {
 	for index, table := range tables {
 		result[index] = table
 		result[index].PrimaryKey = append([]string(nil), table.PrimaryKey...)
+		result[index].UniqueKey = append([]string(nil), table.UniqueKey...)
 	}
 	return result
 }

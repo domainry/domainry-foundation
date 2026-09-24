@@ -93,9 +93,9 @@ func TestSharedKernelSchemaContractAcrossSQLitePostgresAndMySQL(t *testing.T) {
 						if count := strings.Count(joined, declaration); count != 1 {
 							t.Fatalf("table %s canonical declaration count=%d in %q", table.Name, count, joined)
 						}
-						for _, column := range table.PrimaryKey {
+						for _, column := range table.IdentityKey() {
 							if !strings.Contains(joined, dialect.Identifier(column)) {
-								t.Fatalf("table %s omits ownership primary-key column %s", table.Name, column)
+								t.Fatalf("table %s omits ownership identity-key column %s", table.Name, column)
 							}
 						}
 					}
