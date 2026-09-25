@@ -67,16 +67,16 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 	requests, _, err := ormschema.NewTable(renderer, RequestTableName).IfNotExists().Columns(
 		requiredKey("id"), requiredKey("workspace_id"), requiredKey("request_type"), requiredKey("kind"),
 		requiredKey("status"), requiredKey("subject_id"), optionalKey("resolved_identity"), optionalKey("requested_by"),
-		optionalKey("owner_org_id"), optionalKey("download_expires_at"),
+		optionalKey("owner_org_id"), optionalMillis("download_expires_at"),
 		ormschema.Column("backup_pending", ormschema.Boolean()).NotNull().DefaultValue(false),
-		requiredKey("updated_at"), ormschema.Column("payload_json", ormschema.Text()).NotNull(),
+		requiredMillis("updated_at"), ormschema.Column("payload_json", ormschema.Text()).NotNull(),
 	).Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", RequestTableName, err)
 	}
 	steps, _, err := ormschema.NewTable(renderer, StepTableName).IfNotExists().Columns(
 		requiredKey("workspace_id"), requiredKey("request_id"), requiredKey("owner"), requiredKey("operation"),
-		ormschema.Column("payload_json", ormschema.Text()).NotNull(), requiredKey("completed_at"),
+		ormschema.Column("payload_json", ormschema.Text()).NotNull(), requiredMillis("completed_at"),
 	).PrimaryKey("workspace_id", "request_id", "owner", "operation").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", StepTableName, err)
@@ -119,6 +119,14 @@ func requiredKey(name string) ormschema.ColumnDefinition {
 
 func optionalKey(name string) ormschema.ColumnDefinition {
 	return ormschema.Column(name, ormschema.TextKey(indexKeyLength)).NotNull().DefaultValue("")
+}
+
+func requiredMillis(name string) ormschema.ColumnDefinition {
+	return ormschema.Column(name, ormschema.BigInt()).NotNull()
+}
+
+func optionalMillis(name string) ormschema.ColumnDefinition {
+	return ormschema.Column(name, ormschema.BigInt()).NotNull().DefaultValue(0)
 }
 
 func SchemaOwnership() []schemaownership.Table {

@@ -97,14 +97,30 @@ func InsertStarted(ctx context.Context, execer Execer, renderer ormdialect.Rende
 	if !json.Valid(value.ResultJSON) || !json.Valid(value.MetadataJSON) || !json.Valid(value.RelatedIDsJSON) || !json.Valid(value.EvidenceJSON) {
 		return fmt.Errorf("shared leased operation JSON is invalid")
 	}
+	leaseExpiresAt, err := operationTimestampMillis(value.LeaseExpiresAt)
+	if err != nil {
+		return err
+	}
+	expiresAt, err := operationTimestampMillis(value.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	createdAt, err := operationTimestampMillis(value.CreatedAt)
+	if err != nil {
+		return err
+	}
+	updatedAt, err := operationTimestampMillis(value.UpdatedAt)
+	if err != nil {
+		return err
+	}
 	statement, arguments, err := query.NewWorkspaceInsertBuilder(renderer, TableName, strings.TrimSpace(value.WorkspaceID)).
 		Columns(operationColumnsWithoutWorkspace()...).
 		Values(operationRecordValues(
 			value.ID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
 			value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, StatusStarted, "",
 			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON), "",
-			string(value.EvidenceJSON), value.LeaseOwner, value.LeaseExpiresAt, value.FencingToken, value.ExpiresAt,
-			value.CreatedAt, value.CreatedAt, "", value.UpdatedAt,
+			string(value.EvidenceJSON), value.LeaseOwner, leaseExpiresAt, value.FencingToken, expiresAt,
+			createdAt, createdAt, int64(0), updatedAt,
 		)...).Build()
 	if err != nil {
 		return err
@@ -128,15 +144,27 @@ func LoadLeasedByID(ctx context.Context, queryer Queryer, renderer ormdialect.Re
 }
 
 func ReclaimStarted(ctx context.Context, execer Execer, renderer ormdialect.Renderer, value LeaseReclaim) (bool, error) {
+	leaseExpiresAt, err := operationTimestampMillis(value.LeaseExpiresAt)
+	if err != nil {
+		return false, err
+	}
+	updatedAt, err := operationTimestampMillis(value.UpdatedAt)
+	if err != nil {
+		return false, err
+	}
+	expiredAt, err := operationTimestampMillis(value.ExpiredAt)
+	if err != nil {
+		return false, err
+	}
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(renderer, TableName, strings.TrimSpace(value.WorkspaceID)).
 		Set("status", StatusStarted).Set("lease_owner", strings.TrimSpace(value.LeaseOwner)).
-		Set("lease_expires_at", strings.TrimSpace(value.LeaseExpiresAt)).
+		Set("lease_expires_at", leaseExpiresAt).
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).
-		Set("started_at", strings.TrimSpace(value.UpdatedAt)).Set("updated_at", strings.TrimSpace(value.UpdatedAt)).
+		Set("started_at", updatedAt).Set("updated_at", updatedAt).
 		Where(query.And(
 			query.Equal("id", strings.TrimSpace(value.ID)), query.Equal("request_fingerprint", strings.TrimSpace(value.RequestFingerprint)),
 			query.Equal("status", StatusStarted), query.Equal("fencing_token", value.ExpectedToken),
-			query.LessThanOrEqual("lease_expires_at", strings.TrimSpace(value.ExpiredAt)),
+			query.LessThanOrEqual("lease_expires_at", expiredAt),
 		)).Build()
 	if err != nil {
 		return false, err
@@ -156,14 +184,22 @@ func CompleteLeased(ctx context.Context, execer Execer, renderer ormdialect.Rend
 	if !json.Valid(value.ResultJSON) {
 		return false, fmt.Errorf("shared leased operation result is invalid")
 	}
+	expiresAt, err := operationTimestampMillis(value.ExpiresAt)
+	if err != nil {
+		return false, err
+	}
+	completedAt, err := operationTimestampMillis(value.CompletedAt)
+	if err != nil {
+		return false, err
+	}
 	failureClass := ""
 	if value.Status == StatusFailed {
 		failureClass = "terminal"
 	}
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(renderer, TableName, strings.TrimSpace(value.WorkspaceID)).
 		Set("status", value.Status).Set("result_json", string(value.ResultJSON)).Set("error_code", strings.TrimSpace(value.ErrorCode)).
-		Set("failure_class", failureClass).Set("expires_at", strings.TrimSpace(value.ExpiresAt)).
-		Set("finished_at", strings.TrimSpace(value.CompletedAt)).Set("updated_at", strings.TrimSpace(value.CompletedAt)).
+		Set("failure_class", failureClass).Set("expires_at", expiresAt).
+		Set("finished_at", completedAt).Set("updated_at", completedAt).
 		Where(query.And(
 			query.Equal("id", strings.TrimSpace(value.ID)), query.Equal("lease_owner", strings.TrimSpace(value.LeaseOwner)),
 			query.Equal("fencing_token", value.FencingToken), query.Equal("status", StatusStarted),
@@ -191,10 +227,11 @@ func loadLeased(ctx context.Context, queryer Queryer, renderer ormdialect.Render
 	}
 	var value LeasedRecord
 	var resultJSON string
+	var leaseExpiresAt, expiresAt, createdAt, updatedAt int64
 	err = queryer.QueryRowContext(ctx, statement, arguments...).Scan(
 		&value.ID, &value.WorkspaceID, &value.ActionKey, &value.ResourceType, &value.ResourceID, &value.IdempotencyKey,
-		&value.RequestFingerprint, &value.RequestedBy, &value.Status, &resultJSON, &value.LeaseOwner, &value.LeaseExpiresAt,
-		&value.FencingToken, &value.ErrorCode, &value.ExpiresAt, &value.CreatedAt, &value.UpdatedAt,
+		&value.RequestFingerprint, &value.RequestedBy, &value.Status, &resultJSON, &value.LeaseOwner, &leaseExpiresAt,
+		&value.FencingToken, &value.ErrorCode, &expiresAt, &createdAt, &updatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LeasedRecord{}, false, nil
@@ -203,6 +240,7 @@ func loadLeased(ctx context.Context, queryer Queryer, renderer ormdialect.Render
 		return LeasedRecord{}, false, err
 	}
 	value.ResultJSON = json.RawMessage(resultJSON)
+	value.LeaseExpiresAt, value.ExpiresAt, value.CreatedAt, value.UpdatedAt = operationTimestampText(leaseExpiresAt), operationTimestampText(expiresAt), operationTimestampText(createdAt), operationTimestampText(updatedAt)
 	if !json.Valid(value.ResultJSON) {
 		return LeasedRecord{}, false, fmt.Errorf("shared leased operation result is invalid")
 	}

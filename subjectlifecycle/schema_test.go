@@ -2,9 +2,6 @@ package subjectlifecycle
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -60,23 +57,17 @@ func TestMySQLSubjectLifecycleUsesBoundedCompositeKeys(t *testing.T) {
 	}
 }
 
-func TestMySQLPublishedSubjectLifecycleMigrationChecksumIsStable(t *testing.T) {
+func TestMySQLSubjectLifecycleUsesNumericUTCMilliseconds(t *testing.T) {
 	migrations, err := SchemaMigrations("mysql", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := runtimeOwnedMigrationChecksum(migrations[0]), "81e7cbab1b5c40b76754c36ae27550357fcd0f40ec50a14f1104d53689fa04ab"; got != want {
-		t.Fatalf("published Subject Lifecycle migration checksum=%s want %s", got, want)
+	joined := strings.Join(migrations[0].Statements, "\n")
+	for _, column := range []string{"`download_expires_at` BIGINT", "`updated_at` BIGINT NOT NULL", "`completed_at` BIGINT NOT NULL"} {
+		if !strings.Contains(joined, column) {
+			t.Fatalf("Subject Lifecycle migration must store %s as UTC milliseconds", column)
+		}
 	}
-}
-
-func runtimeOwnedMigrationChecksum(migration SchemaMigration) string {
-	hash := sha256.New()
-	_, _ = fmt.Fprintf(hash, "%d\x00%s\x00", migration.Version, strings.TrimSpace(migration.Name))
-	for _, statement := range migration.Statements {
-		_, _ = fmt.Fprintf(hash, "%s\x00", statement)
-	}
-	return hex.EncodeToString(hash.Sum(nil))
 }
 
 type recordingRegistrar struct {

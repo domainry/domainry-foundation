@@ -301,11 +301,11 @@ func (s *SQLStore) UpdateRecord(ctx context.Context, value Record, expectedStatu
 	}
 	statement, arguments, err := recordUpdate(s, value.WorkspaceID).
 		Set("status", strings.TrimSpace(value.Status)).Set("reason", value.Reason).Set("reference", value.Reference).
-		Set("started_at", value.StartedAt).Set("finished_at", value.FinishedAt).Set("updated_at", value.UpdatedAt).
+		Set("started_at", mustOperationTimestampMillis(value.StartedAt)).Set("finished_at", mustOperationTimestampMillis(value.FinishedAt)).Set("updated_at", mustOperationTimestampMillis(value.UpdatedAt)).
 		Set("result_json", string(value.ResultJSON)).Set("metadata_json", string(value.MetadataJSON)).Set("error_code", value.ErrorCode).
-		Set("failure_class", value.FailureClass).Set("next_action", value.NextAction).Set("related_ids_json", string(value.RelatedIDsJSON)).
+		Set("failure_class", value.FailureClass).Set("next_action", mustOperationTimestampMillis(value.NextAction)).Set("related_ids_json", string(value.RelatedIDsJSON)).
 		Set("correlation", value.Correlation).Set("evidence_json", string(value.EvidenceJSON)).Set("lease_owner", value.LeaseOwner).
-		Set("lease_expires_at", value.LeaseExpiresAt).Set("fencing_token", value.FencingToken).Set("expires_at", value.ExpiresAt).
+		Set("lease_expires_at", mustOperationTimestampMillis(value.LeaseExpiresAt)).Set("fencing_token", value.FencingToken).Set("expires_at", mustOperationTimestampMillis(value.ExpiresAt)).
 		Where(predicate).Build()
 	if err != nil {
 		return false, err
@@ -374,7 +374,6 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 	}
 	setString("error_code", changes.ErrorCode)
 	setString("failure_class", changes.FailureClass)
-	setString("next_action", changes.NextAction)
 	if err := setJSON("related_ids_json", changes.RelatedIDsJSON); err != nil {
 		return false, err
 	}
@@ -383,7 +382,24 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 		return false, err
 	}
 	setString("lease_owner", changes.LeaseOwner)
-	setString("lease_expires_at", changes.LeaseExpiresAt)
+	setTimestamp := func(column string, value *string) error {
+		if value == nil {
+			return nil
+		}
+		millis, parseErr := operationTimestampMillis(*value)
+		if parseErr != nil {
+			return parseErr
+		}
+		builder = builder.Set(column, millis)
+		assignments++
+		return nil
+	}
+	if err := setTimestamp("next_action", changes.NextAction); err != nil {
+		return false, err
+	}
+	if err := setTimestamp("lease_expires_at", changes.LeaseExpiresAt); err != nil {
+		return false, err
+	}
 	if changes.FencingToken != nil {
 		builder = builder.Set("fencing_token", *changes.FencingToken)
 		assignments++
@@ -395,10 +411,11 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 		builder = builder.SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1)))
 		assignments++
 	}
-	setString("expires_at", changes.ExpiresAt)
-	setString("started_at", changes.StartedAt)
-	setString("finished_at", changes.FinishedAt)
-	setString("updated_at", changes.UpdatedAt)
+	for column, value := range map[string]*string{"expires_at": changes.ExpiresAt, "started_at": changes.StartedAt, "finished_at": changes.FinishedAt, "updated_at": changes.UpdatedAt} {
+		if err := setTimestamp(column, value); err != nil {
+			return false, err
+		}
+	}
 	if assignments == 0 {
 		return false, fmt.Errorf("operation record patch requires changes")
 	}
@@ -451,12 +468,12 @@ func (s *SQLStore) CountLeases(ctx context.Context, filter RecordFilter, instanc
 	if instanceID = strings.TrimSpace(instanceID); instanceID != "" {
 		predicate = and(predicate, query.Or(query.Equal("lease_owner", instanceID), query.Like("lease_owner", instanceID+":%"), query.Like("lease_owner", instanceID+"-%")))
 	}
-	now = strings.TrimSpace(now)
-	if now == "" {
+	nowMillis, parseErr := operationTimestampMillis(now)
+	if strings.TrimSpace(now) == "" || parseErr != nil {
 		return LeaseCounts{}, fmt.Errorf("operation lease count time is required")
 	}
-	live := query.Coalesce(query.Sum(query.CaseWhen(query.GreaterThan("lease_expires_at", now), 1).Else(0)), query.Value(0))
-	expired := query.Coalesce(query.Sum(query.CaseWhen(query.And(query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", now)), 1).Else(0)), query.Value(0))
+	live := query.Coalesce(query.Sum(query.CaseWhen(query.GreaterThan("lease_expires_at", nowMillis), 1).Else(0)), query.Value(0))
+	expired := query.Coalesce(query.Sum(query.CaseWhen(query.And(query.NotEqual("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", nowMillis)), 1).Else(0)), query.Value(0))
 	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Projections(query.Project(live), query.Project(expired)).Where(predicate).Build()
 	if err != nil {
 		return LeaseCounts{}, err
@@ -476,10 +493,11 @@ func (s *SQLStore) CountExpiredLeases(ctx context.Context, filter RecordFilter, 
 	if err != nil {
 		return 0, err
 	}
-	if now = strings.TrimSpace(now); now == "" {
+	nowMillis, parseErr := operationTimestampMillis(now)
+	if strings.TrimSpace(now) == "" || parseErr != nil {
 		return 0, fmt.Errorf("operation expired lease count time is required")
 	}
-	predicate = and(predicate, query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", now))
+	predicate = and(predicate, query.NotEqual("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", nowMillis))
 	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Projections(query.Project(query.CountAll())).Where(predicate).Build()
 	if err != nil {
 		return 0, err
@@ -538,6 +556,11 @@ func (value Record) validate() error {
 	for _, raw := range []json.RawMessage{value.ResultJSON, value.MetadataJSON, value.RelatedIDsJSON, value.EvidenceJSON} {
 		if !json.Valid(raw) {
 			return fmt.Errorf("operation record JSON is invalid")
+		}
+	}
+	for name, timestamp := range map[string]string{"created_at": value.CreatedAt, "updated_at": value.UpdatedAt, "next_action": value.NextAction, "lease_expires_at": value.LeaseExpiresAt, "expires_at": value.ExpiresAt, "started_at": value.StartedAt, "finished_at": value.FinishedAt} {
+		if _, err := operationTimestampMillis(timestamp); err != nil {
+			return fmt.Errorf("operation record %s: %w", name, err)
 		}
 	}
 	return nil
@@ -611,29 +634,49 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 		predicate = and(predicate, query.Equal("fencing_token", *filter.FencingToken))
 	}
 	if value := strings.TrimSpace(filter.LeaseExpiresAtOrBefore); value != "" && strings.TrimSpace(filter.ReclaimableStatus) == "" && strings.TrimSpace(filter.ExpiredLeaseStatus) == "" {
-		predicate = and(predicate, query.LessThanOrEqual("lease_expires_at", value))
+		millis, err := operationTimestampMillis(value)
+		if err != nil {
+			return nil, err
+		}
+		predicate = and(predicate, query.LessThanOrEqual("lease_expires_at", millis))
 	}
 	if value := strings.TrimSpace(filter.LeaseExpiresAfter); value != "" {
-		predicate = and(predicate, query.GreaterThan("lease_expires_at", value))
+		millis, err := operationTimestampMillis(value)
+		if err != nil {
+			return nil, err
+		}
+		predicate = and(predicate, query.GreaterThan("lease_expires_at", millis))
 	}
 	if reclaimable, leased := strings.TrimSpace(filter.ReclaimableStatus), strings.TrimSpace(filter.ExpiredLeaseStatus); reclaimable != "" || leased != "" {
 		expiredAt := strings.TrimSpace(filter.LeaseExpiresAtOrBefore)
 		if reclaimable == "" || leased == "" || expiredAt == "" {
 			return nil, fmt.Errorf("operation record reclaim filter requires both statuses and lease expiry")
 		}
+		expiredMillis, err := operationTimestampMillis(expiredAt)
+		if err != nil {
+			return nil, err
+		}
 		predicate = and(predicate, query.Or(
 			query.Equal("status", reclaimable),
-			query.And(query.Equal("status", leased), query.LessThanOrEqual("lease_expires_at", expiredAt)),
+			query.And(query.Equal("status", leased), query.LessThanOrEqual("lease_expires_at", expiredMillis)),
 		))
 	}
 	if value := strings.TrimSpace(filter.CreatedFrom); value != "" {
-		predicate = and(predicate, query.GreaterThanOrEqual("created_at", value))
+		millis, err := operationTimestampMillis(value)
+		if err != nil {
+			return nil, err
+		}
+		predicate = and(predicate, query.GreaterThanOrEqual("created_at", millis))
 	}
 	if value := strings.TrimSpace(filter.CreatedTo); value != "" {
-		predicate = and(predicate, query.LessThanOrEqual("created_at", value))
+		millis, err := operationTimestampMillis(value)
+		if err != nil {
+			return nil, err
+		}
+		predicate = and(predicate, query.LessThanOrEqual("created_at", millis))
 	}
 	if value := strings.ToLower(strings.TrimSpace(filter.Search)); value != "" {
-		columns := []string{"id", "owner", "kind", "parent_id", "resource_type", "resource_id", "requested_by", "reason", "correlation", "error_code", "next_action"}
+		columns := []string{"id", "owner", "kind", "parent_id", "resource_type", "resource_id", "requested_by", "reason", "correlation", "error_code"}
 		terms := make([]query.Predicate, 0, len(columns))
 		for _, column := range columns {
 			terms = append(terms, query.LikeValue(query.Lower(query.Column(column)), "%"+value+"%"))
@@ -661,9 +704,9 @@ func recordValues(value Record) []any {
 	return []any{
 		value.ID, value.WorkspaceID, value.SystemPurpose, value.Owner, value.Kind, value.ActionKey, value.ParentID, value.ResourceType, value.ResourceID,
 		value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, value.Status, value.StatusURL,
-		string(value.ResultJSON), string(value.MetadataJSON), value.ErrorCode, value.FailureClass, value.NextAction, string(value.RelatedIDsJSON),
-		value.Correlation, string(value.EvidenceJSON), value.LeaseOwner, value.LeaseExpiresAt, value.FencingToken, value.ExpiresAt,
-		value.CreatedAt, value.StartedAt, value.FinishedAt, value.UpdatedAt,
+		string(value.ResultJSON), string(value.MetadataJSON), value.ErrorCode, value.FailureClass, mustOperationTimestampMillis(value.NextAction), string(value.RelatedIDsJSON),
+		value.Correlation, string(value.EvidenceJSON), value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt), value.FencingToken, mustOperationTimestampMillis(value.ExpiresAt),
+		mustOperationTimestampMillis(value.CreatedAt), mustOperationTimestampMillis(value.StartedAt), mustOperationTimestampMillis(value.FinishedAt), mustOperationTimestampMillis(value.UpdatedAt),
 	}
 }
 
@@ -675,17 +718,21 @@ func recordValuesWithoutWorkspace(value Record) []any {
 func scanRecord(scanner scanner) (Record, error) {
 	var value Record
 	var resultJSON, metadataJSON, relatedIDsJSON, evidenceJSON string
+	var nextAction, leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
 	err := scanner.Scan(
 		&value.ID, &value.WorkspaceID, &value.SystemPurpose, &value.Owner, &value.Kind, &value.ActionKey, &value.ParentID, &value.ResourceType, &value.ResourceID,
 		&value.IdempotencyKey, &value.RequestFingerprint, &value.RequestedBy, &value.Reason, &value.Reference, &value.Status, &value.StatusURL,
-		&resultJSON, &metadataJSON, &value.ErrorCode, &value.FailureClass, &value.NextAction, &relatedIDsJSON, &value.Correlation, &evidenceJSON,
-		&value.LeaseOwner, &value.LeaseExpiresAt, &value.FencingToken, &value.ExpiresAt, &value.CreatedAt, &value.StartedAt, &value.FinishedAt, &value.UpdatedAt,
+		&resultJSON, &metadataJSON, &value.ErrorCode, &value.FailureClass, &nextAction, &relatedIDsJSON, &value.Correlation, &evidenceJSON,
+		&value.LeaseOwner, &leaseExpiresAt, &value.FencingToken, &expiresAt, &createdAt, &startedAt, &finishedAt, &updatedAt,
 	)
 	if err != nil {
 		return value, err
 	}
 	value.ResultJSON, value.MetadataJSON = json.RawMessage(resultJSON), json.RawMessage(metadataJSON)
 	value.RelatedIDsJSON, value.EvidenceJSON = json.RawMessage(relatedIDsJSON), json.RawMessage(evidenceJSON)
+	value.NextAction = operationTimestampText(nextAction)
+	value.LeaseExpiresAt, value.ExpiresAt, value.CreatedAt = operationTimestampText(leaseExpiresAt), operationTimestampText(expiresAt), operationTimestampText(createdAt)
+	value.StartedAt, value.FinishedAt, value.UpdatedAt = operationTimestampText(startedAt), operationTimestampText(finishedAt), operationTimestampText(updatedAt)
 	for _, raw := range []json.RawMessage{value.ResultJSON, value.MetadataJSON, value.RelatedIDsJSON, value.EvidenceJSON} {
 		if !json.Valid(raw) {
 			return Record{}, fmt.Errorf("operation record JSON is invalid")

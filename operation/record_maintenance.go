@@ -79,7 +79,7 @@ func (s *SQLStore) FenceRecordsForErasure(ctx context.Context, workspaceID strin
 		return 0, err
 	}
 	statement, arguments, err := recordUpdate(s, workspaceID).
-		Set("status", "failed").Set("lease_owner", "").Set("lease_expires_at", "").
+		Set("status", "failed").Set("lease_owner", "").Set("lease_expires_at", int64(0)).
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).Where(predicate).Build()
 	if err != nil {
 		return 0, err
@@ -107,9 +107,9 @@ func (s *SQLStore) EraseRecords(ctx context.Context, workspaceID string, values 
 		}
 		statement, arguments, err := recordUpdate(s, workspaceID).
 			Set("requested_by", "anonymous").Set("reason", "").Set("reference", "").Set("result_json", "{}").Set("metadata_json", "{}").
-			Set("related_ids_json", "[]").Set("evidence_json", "[]").Set("next_action", "").Set("request_fingerprint", "").
+			Set("related_ids_json", "[]").Set("evidence_json", "[]").Set("next_action", int64(0)).Set("request_fingerprint", "").
 			Set("idempotency_key", value.IdempotencyKey).Set("status", "failed").Set("error_code", "runtime.subject_erased").
-			Set("lease_owner", "").Set("lease_expires_at", "").Where(query.Equal("id", value.ID)).Build()
+			Set("lease_owner", "").Set("lease_expires_at", int64(0)).Where(query.Equal("id", value.ID)).Build()
 		if err != nil {
 			return total, err
 		}
@@ -138,10 +138,14 @@ func (s *SQLStore) ListExpiredRecords(ctx context.Context, filter RecordFilter, 
 	if now == "" || protectedStatus == "" {
 		return nil, fmt.Errorf("operation expiry boundary and protected status are required")
 	}
+	nowMillis, err := operationTimestampMillis(now)
+	if err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
-	predicate = and(predicate, query.NotEqual("expires_at", ""), query.LessThanOrEqual("expires_at", now), query.NotEqual("status", protectedStatus))
+	predicate = and(predicate, query.NotEqual("expires_at", int64(0)), query.LessThanOrEqual("expires_at", nowMillis), query.NotEqual("status", protectedStatus))
 	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Columns(operationColumns...).Where(predicate).
 		OrderBy(query.Ascending("expires_at"), query.Ascending("id")).Limit(limit).Build()
 	if err != nil {
@@ -175,10 +179,14 @@ func (s *SQLStore) ListExpiredRecordLocators(ctx context.Context, filter RecordF
 	if now == "" || protectedStatus == "" {
 		return nil, fmt.Errorf("operation expiry boundary and protected status are required")
 	}
+	nowMillis, err := operationTimestampMillis(now)
+	if err != nil {
+		return nil, err
+	}
 	if limit <= 0 || limit > 5000 {
 		limit = 500
 	}
-	predicate = and(predicate, query.NotEqual("expires_at", ""), query.LessThanOrEqual("expires_at", now), query.NotEqual("status", protectedStatus))
+	predicate = and(predicate, query.NotEqual("expires_at", int64(0)), query.LessThanOrEqual("expires_at", nowMillis), query.NotEqual("status", protectedStatus))
 	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Columns("id", "workspace_id").Where(predicate).
 		OrderBy(query.Ascending("expires_at"), query.Ascending("id")).Limit(limit).Build()
 	if err != nil {
@@ -221,7 +229,11 @@ func (s *SQLStore) DeleteExpiredRecords(ctx context.Context, filter RecordFilter
 	if now == "" || protectedStatus == "" {
 		return 0, fmt.Errorf("operation expiry boundary and protected status are required")
 	}
-	predicate = and(predicate, query.In("id", values...), query.NotEqual("expires_at", ""), query.LessThanOrEqual("expires_at", now), query.NotEqual("status", protectedStatus))
+	nowMillis, err := operationTimestampMillis(now)
+	if err != nil {
+		return 0, err
+	}
+	predicate = and(predicate, query.In("id", values...), query.NotEqual("expires_at", int64(0)), query.LessThanOrEqual("expires_at", nowMillis), query.NotEqual("status", protectedStatus))
 	var builder *query.DeleteBuilder
 	if strings.TrimSpace(filter.WorkspaceID) != "" {
 		builder = query.NewWorkspaceDeleteBuilder(s.dialect, TableName, strings.TrimSpace(filter.WorkspaceID))

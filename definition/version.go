@@ -20,7 +20,7 @@ type versionValue struct {
 	SchemaVersion  string
 	SchemaHash     string
 	Payload        json.RawMessage
-	CreatedAt      string
+	CreatedAt      int64
 }
 
 func (s Store) ensureVersion(ctx context.Context, executor DBTX, value versionValue) (string, error) {

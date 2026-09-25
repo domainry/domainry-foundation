@@ -50,9 +50,9 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("name", ormschema.Text()), required("payload_json", ormschema.LongText()),
 		required("schema_version", ormschema.TextKey(255)), required("schema_hash", ormschema.TextKey(255)),
 		required("source_kind", ormschema.TextKey(255)), required("source_id", ormschema.TextKey(255)),
-		required("published_at", ormschema.TextKey(255)), required("published_by", ormschema.TextKey(255)),
-		optional("disabled_at", ormschema.TextKey(255)), optional("disabled_by", ormschema.TextKey(255)),
-		required("created_at", ormschema.TextKey(255)), required("updated_at", ormschema.TextKey(255)),
+		required("published_at", ormschema.BigInt()), required("published_by", ormschema.TextKey(255)),
+		optional("disabled_at", ormschema.BigInt()), optional("disabled_by", ormschema.TextKey(255)),
+		required("created_at", ormschema.BigInt()), required("updated_at", ormschema.BigInt()),
 	).PrimaryKey("id").Unique("installation_id", "owner", "kind", "definition_key").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", TableName, err)
@@ -62,7 +62,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("installation_id", ormschema.TextKey(255)), required("owner", ormschema.TextKey(64)),
 		required("kind", ormschema.TextKey(128)), required("definition_key", ormschema.TextKey(255)),
 		required("schema_version", ormschema.TextKey(255)), required("schema_hash", ormschema.TextKey(255)),
-		required("payload_json", ormschema.LongText()), required("created_at", ormschema.TextKey(255)),
+		required("payload_json", ormschema.LongText()), required("created_at", ormschema.BigInt()),
 	).PrimaryKey("id").Unique("definition_id", "schema_version").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", VersionTableName, err)

@@ -79,7 +79,7 @@ func (s *SQLStore) Complete(ctx context.Context, completion Completion) error {
 		query.Equal("kind", strings.TrimSpace(completion.Kind)), query.Equal("idempotency_key", strings.TrimSpace(completion.IdempotencyKey)),
 		query.Equal("request_fingerprint", strings.TrimSpace(completion.RequestFingerprint)), query.Equal("status", StatusStarted),
 	)
-	completedAt := completion.CompletedAt.UTC().Format(time.RFC3339Nano)
+	completedAt := completion.CompletedAt.UTC().UnixMilli()
 	statement, args, err := operationUpdate(s, completion.Scope.WorkspaceID).
 		Set("status", StatusSucceeded).Set("result_json", string(completion.Result)).Set("finished_at", completedAt).Set("updated_at", completedAt).
 		Where(predicate).Build()
@@ -158,10 +158,18 @@ func (s *SQLStore) List(ctx context.Context, filter ManagedQuery) ([]ManagedOper
 		predicate = and(predicate, query.In("status", values...))
 	}
 	if value := strings.TrimSpace(filter.NextActionBefore); value != "" {
-		predicate = and(predicate, query.NotEqual("next_action", ""), query.LessThanOrEqual("next_action", value))
+		millis, parseErr := operationTimestampMillis(value)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		predicate = and(predicate, query.NotEqual("next_action", int64(0)), query.LessThanOrEqual("next_action", millis))
 	}
 	if value := strings.TrimSpace(filter.LeaseExpiresBefore); value != "" {
-		predicate = and(predicate, query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", value))
+		millis, parseErr := operationTimestampMillis(value)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		predicate = and(predicate, query.NotEqual("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", millis))
 	}
 	builder := operationSelect(s, filter.Scope.WorkspaceID).Columns(operationColumns...).Where(predicate).Limit(filter.Limit)
 	if filter.OldestFirst {
@@ -200,12 +208,16 @@ func (s *SQLStore) Transition(ctx context.Context, transition ManagedTransition)
 	if transition.ExpectedFencingToken > 0 {
 		predicate = and(predicate, query.Equal("lease_owner", strings.TrimSpace(transition.ExpectedLeaseOwner)), query.Equal("fencing_token", transition.ExpectedFencingToken))
 	}
+	nextAction, err := operationTimestampMillis(transition.NextAction)
+	if err != nil {
+		return ManagedOperation{}, false, err
+	}
 	builder := operationUpdate(s, transition.Identity.Scope.WorkspaceID).
 		Set("status", strings.TrimSpace(transition.Status)).Set("metadata_json", string(transition.Metadata)).Set("result_json", string(transition.Result)).
-		Set("error_code", strings.TrimSpace(transition.ErrorCode)).Set("next_action", strings.TrimSpace(transition.NextAction)).
-		Set("updated_at", transition.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		Set("error_code", strings.TrimSpace(transition.ErrorCode)).Set("next_action", nextAction).
+		Set("updated_at", transition.UpdatedAt.UTC().UnixMilli())
 	if transition.ClearLease {
-		builder = builder.Set("lease_owner", "").Set("lease_expires_at", "")
+		builder = builder.Set("lease_owner", "").Set("lease_expires_at", int64(0))
 	}
 	statement, args, err := builder.Where(predicate).Build()
 	if err != nil {
@@ -229,15 +241,23 @@ func (s *SQLStore) ClaimManaged(ctx context.Context, claim ManagedClaim) (Manage
 	if err := claim.Validate(); err != nil {
 		return ManagedOperation{}, false, err
 	}
+	now, err := operationTimestampMillis(claim.Now)
+	if err != nil {
+		return ManagedOperation{}, false, err
+	}
+	leaseExpiresAt, err := operationTimestampMillis(claim.LeaseExpiresAt)
+	if err != nil {
+		return ManagedOperation{}, false, err
+	}
 	due := query.Or(
-		query.And(query.Equal("status", strings.TrimSpace(claim.DueStatus)), query.NotEqual("next_action", ""), query.LessThanOrEqual("next_action", strings.TrimSpace(claim.Now))),
-		query.And(query.Equal("status", strings.TrimSpace(claim.ReclaimStatus)), query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", strings.TrimSpace(claim.Now))),
+		query.And(query.Equal("status", strings.TrimSpace(claim.DueStatus)), query.NotEqual("next_action", int64(0)), query.LessThanOrEqual("next_action", now)),
+		query.And(query.Equal("status", strings.TrimSpace(claim.ReclaimStatus)), query.NotEqual("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", now)),
 	)
 	predicate := and(identityPredicate(claim.Identity), due)
 	statement, args, err := operationUpdate(s, claim.Identity.Scope.WorkspaceID).
 		Set("status", strings.TrimSpace(claim.Status)).Set("lease_owner", strings.TrimSpace(claim.LeaseOwner)).
-		Set("lease_expires_at", strings.TrimSpace(claim.LeaseExpiresAt)).SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).
-		Set("updated_at", claim.UpdatedAt.UTC().Format(time.RFC3339Nano)).Where(predicate).Build()
+		Set("lease_expires_at", leaseExpiresAt).SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).
+		Set("updated_at", claim.UpdatedAt.UTC().UnixMilli()).Where(predicate).Build()
 	if err != nil {
 		return ManagedOperation{}, false, err
 	}
@@ -299,7 +319,7 @@ func (s *SQLStore) PutControl(ctx context.Context, value Control, expectedRevisi
 	}
 	statement, args, err := query.NewUpdateBuilder(s.dialect, ControlTableName).
 		Set("state", strings.TrimSpace(value.State)).Set("reason", value.Reason).Set("reference", value.Reference).
-		Set("updated_by", strings.TrimSpace(value.UpdatedBy)).Set("revision", value.Revision).Set("updated_at", value.UpdatedAt.UTC().Format(time.RFC3339Nano)).
+		Set("updated_by", strings.TrimSpace(value.UpdatedBy)).Set("revision", value.Revision).Set("updated_at", value.UpdatedAt.UTC().UnixMilli()).
 		Where(query.And(query.Equal("system_purpose", strings.TrimSpace(value.SystemPurpose)), query.Equal("control_kind", strings.TrimSpace(value.Kind)),
 			query.Equal("owner", strings.TrimSpace(value.Owner)), query.Equal("revision", expectedRevision))).Build()
 	if err != nil {
@@ -406,8 +426,8 @@ func operationValues(value ManagedOperation, startedAt, finishedAt, expiresAt st
 	return []any{
 		command.ID, command.Scope.WorkspaceID, command.Scope.SystemPurpose, command.Owner, command.Kind, command.ActionKey, "", command.Scope.ResourceType, command.Scope.ResourceID,
 		command.IdempotencyKey, command.RequestFingerprint, command.RequestedBy, command.Reason, command.Reference, value.Status, command.StatusURL,
-		string(value.Result), string(value.Metadata), value.ErrorCode, "", value.NextAction, `[]`, "", `[]`, value.LeaseOwner, value.LeaseExpiresAt,
-		value.FencingToken, expiresAt, command.CreatedAt.UTC().Format(time.RFC3339Nano), startedAt, finishedAt, value.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		string(value.Result), string(value.Metadata), value.ErrorCode, "", mustOperationTimestampMillis(value.NextAction), `[]`, "", `[]`, value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt),
+		value.FencingToken, mustOperationTimestampMillis(expiresAt), command.CreatedAt.UTC().UnixMilli(), mustOperationTimestampMillis(startedAt), mustOperationTimestampMillis(finishedAt), value.UpdatedAt.UTC().UnixMilli(),
 	}
 }
 
@@ -415,41 +435,41 @@ type scanner interface{ Scan(...any) error }
 
 func scanOperation(row scanner) (ManagedOperation, error) {
 	var value ManagedOperation
-	var workspaceID, systemPurpose, parentID, status, resultJSON, metadataJSON, failureClass, relatedIDs, correlation, evidence, expiresAt, createdAt, startedAt, finishedAt, updatedAt string
+	var workspaceID, systemPurpose, parentID, status, resultJSON, metadataJSON, failureClass, relatedIDs, correlation, evidence string
+	var nextAction, leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
 	command := &value.Command
 	err := row.Scan(
 		&command.ID, &workspaceID, &systemPurpose, &command.Owner, &command.Kind, &command.ActionKey, &parentID, &command.Scope.ResourceType, &command.Scope.ResourceID,
 		&command.IdempotencyKey, &command.RequestFingerprint, &command.RequestedBy, &command.Reason, &command.Reference, &status, &command.StatusURL,
-		&resultJSON, &metadataJSON, &value.ErrorCode, &failureClass, &value.NextAction, &relatedIDs, &correlation, &evidence, &value.LeaseOwner,
-		&value.LeaseExpiresAt, &value.FencingToken, &expiresAt, &createdAt, &startedAt, &finishedAt, &updatedAt,
+		&resultJSON, &metadataJSON, &value.ErrorCode, &failureClass, &nextAction, &relatedIDs, &correlation, &evidence, &value.LeaseOwner,
+		&leaseExpiresAt, &value.FencingToken, &expiresAt, &createdAt, &startedAt, &finishedAt, &updatedAt,
 	)
 	if err != nil {
 		return value, err
 	}
 	command.Scope.WorkspaceID, command.Scope.SystemPurpose = workspaceID, systemPurpose
 	value.Status, value.Result, value.Metadata = status, json.RawMessage(resultJSON), json.RawMessage(metadataJSON)
-	command.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
-	if err != nil {
-		return value, err
-	}
-	value.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
-	return value, err
+	value.NextAction = operationTimestampText(nextAction)
+	value.LeaseExpiresAt = operationTimestampText(leaseExpiresAt)
+	command.CreatedAt = time.UnixMilli(createdAt).UTC()
+	value.UpdatedAt = time.UnixMilli(updatedAt).UTC()
+	return value, nil
 }
 
 func controlValues(value Control) []any {
 	return []any{strings.TrimSpace(value.SystemPurpose), strings.TrimSpace(value.Kind), strings.TrimSpace(value.Owner), strings.TrimSpace(value.State),
-		value.Reason, value.Reference, strings.TrimSpace(value.UpdatedBy), value.Revision, value.UpdatedAt.UTC().Format(time.RFC3339Nano)}
+		value.Reason, value.Reference, strings.TrimSpace(value.UpdatedBy), value.Revision, value.UpdatedAt.UTC().UnixMilli()}
 }
 
 func scanControl(row scanner) (Control, error) {
 	var value Control
-	var updatedAt string
+	var updatedAt int64
 	err := row.Scan(&value.SystemPurpose, &value.Kind, &value.Owner, &value.State, &value.Reason, &value.Reference, &value.UpdatedBy, &value.Revision, &updatedAt)
 	if err != nil {
 		return value, err
 	}
-	value.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
-	return value, err
+	value.UpdatedAt = time.UnixMilli(updatedAt).UTC()
+	return value, nil
 }
 
 var _ Store = (*SQLStore)(nil)

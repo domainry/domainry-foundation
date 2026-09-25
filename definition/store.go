@@ -76,7 +76,7 @@ func (s Store) ReplaceSourceSnapshot(ctx context.Context, snapshot SourceSnapsho
 	snapshot.SourceKind = strings.TrimSpace(snapshot.SourceKind)
 	snapshot.SourceID = strings.TrimSpace(snapshot.SourceID)
 	syncRows := func(executor DBTX) error {
-		return s.syncDefinitionRows(ctx, executor, snapshot.Owner, snapshot.SchemaVersion, snapshot.SourceKind, snapshot.SourceID, snapshot.Definitions, time.Now().UTC().Format(time.RFC3339Nano))
+		return s.syncDefinitionRows(ctx, executor, snapshot.Owner, snapshot.SchemaVersion, snapshot.SourceKind, snapshot.SourceID, snapshot.Definitions, time.Now().UTC().UnixMilli())
 	}
 	if executor := ExecutorFromContext(ctx, nil); executor != nil {
 		return syncRows(executor)
@@ -111,7 +111,7 @@ func (s Store) validate() error {
 	return nil
 }
 
-func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, schemaVersion, sourceKind, sourceID string, definitions []Definition, now string) error {
+func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, schemaVersion, sourceKind, sourceID string, definitions []Definition, now int64) error {
 	disable, args, err := query.NewUpdateBuilder(s.dialect, TableName).
 		Set("status", "disabled").Set("disabled_at", now).Set("updated_at", now).
 		Where(query.And(
@@ -298,19 +298,26 @@ type rowScanner interface{ Scan(...any) error }
 func scanDefinition(row rowScanner) (Definition, error) {
 	var value Definition
 	var payload string
-	var disabled, disabledBy sql.NullString
+	var publishedAt, createdAt, updatedAt int64
+	var disabled sql.NullInt64
+	var disabledBy sql.NullString
 	err := row.Scan(&value.Owner, &value.ResourceType, &value.ResourceKey, &value.CurrentVersionID, &value.Status,
 		&value.ObjectKey, &value.Name, &payload, &value.SchemaVersion, &value.SchemaHash,
-		&value.SourceKind, &value.SourceID, &value.PublishedAt, &value.PublishedBy,
-		&disabled, &disabledBy, &value.CreatedAt, &value.UpdatedAt)
+		&value.SourceKind, &value.SourceID, &publishedAt, &value.PublishedBy,
+		&disabled, &disabledBy, &createdAt, &updatedAt)
 	value.Payload = json.RawMessage(payload)
 	if disabled.Valid {
-		value.DisabledAt = disabled.String
+		value.DisabledAt = definitionTimestampText(disabled.Int64)
 	}
 	if disabledBy.Valid {
 		value.DisabledBy = disabledBy.String
 	}
+	value.PublishedAt, value.CreatedAt, value.UpdatedAt = definitionTimestampText(publishedAt), definitionTimestampText(createdAt), definitionTimestampText(updatedAt)
 	return value, err
+}
+
+func definitionTimestampText(value int64) string {
+	return time.UnixMilli(value).UTC().Format(time.RFC3339Nano)
 }
 
 func columns() []string {

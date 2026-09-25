@@ -92,8 +92,12 @@ func UpdateSucceededResult(ctx context.Context, execer Execer, renderer ormdiale
 	if !json.Valid(previous) || !json.Valid(next) || strings.TrimSpace(updatedAt) == "" {
 		return false, fmt.Errorf("shared operation result update is invalid")
 	}
+	updatedAtMillis, err := operationTimestampMillis(updatedAt)
+	if err != nil {
+		return false, err
+	}
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(renderer, TableName, strings.TrimSpace(workspaceID)).
-		Set("result_json", string(next)).Set("updated_at", strings.TrimSpace(updatedAt)).
+		Set("result_json", string(next)).Set("updated_at", updatedAtMillis).
 		Where(query.And(
 			query.Equal("system_purpose", ""), query.Equal("owner", strings.TrimSpace(owner)),
 			query.Equal("kind", strings.TrimSpace(kind)), query.Equal("id", strings.TrimSpace(id)),
@@ -131,13 +135,17 @@ func InsertSucceeded(ctx context.Context, execer Execer, renderer ormdialect.Ren
 	if !json.Valid(value.MetadataJSON) || !json.Valid(value.RelatedIDsJSON) || !json.Valid(value.EvidenceJSON) {
 		return fmt.Errorf("shared operation metadata is invalid")
 	}
+	completedAt, err := operationTimestampMillis(value.CompletedAt)
+	if err != nil {
+		return err
+	}
 	statement, arguments, err := query.NewWorkspaceInsertBuilder(renderer, TableName, strings.TrimSpace(value.WorkspaceID)).
 		Columns(operationColumnsWithoutWorkspace()...).
 		Values(operationRecordValues(
 			value.ID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
 			value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, StatusSucceeded, "",
 			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON), value.Correlation,
-			string(value.EvidenceJSON), "", "", 0, "", value.CompletedAt, value.CompletedAt, value.CompletedAt, value.CompletedAt,
+			string(value.EvidenceJSON), "", int64(0), 0, int64(0), completedAt, completedAt, completedAt, completedAt,
 		)...).Build()
 	if err != nil {
 		return err
@@ -149,11 +157,12 @@ func InsertSucceeded(ctx context.Context, execer Execer, renderer ormdialect.Ren
 func scanSucceededReceipt(row *sql.Row, withReference bool) (SucceededReceipt, bool, error) {
 	var value SucceededReceipt
 	var raw string
+	var createdAt int64
 	var err error
 	if withReference {
-		err = row.Scan(&value.ID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &value.Reference, &raw, &value.CreatedAt, &value.Status)
+		err = row.Scan(&value.ID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &value.Reference, &raw, &createdAt, &value.Status)
 	} else {
-		err = row.Scan(&value.ID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &raw, &value.CreatedAt, &value.Status)
+		err = row.Scan(&value.ID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &raw, &createdAt, &value.Status)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return SucceededReceipt{}, false, nil
@@ -162,6 +171,7 @@ func scanSucceededReceipt(row *sql.Row, withReference bool) (SucceededReceipt, b
 		return SucceededReceipt{}, false, err
 	}
 	value.ResultJSON = json.RawMessage(raw)
+	value.CreatedAt = operationTimestampText(createdAt)
 	if value.Status != StatusSucceeded || !json.Valid(value.ResultJSON) {
 		return SucceededReceipt{}, false, fmt.Errorf("shared operation receipt invalid")
 	}

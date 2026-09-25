@@ -43,8 +43,12 @@ func (s *SQLStore) CountActiveBreakGlass(ctx context.Context, workspaceID, state
 	if workspaceID == "" || state == "" || expiresAfter == "" {
 		return 0, fmt.Errorf("break-glass active scope is incomplete")
 	}
+	expiresAfterMillis, err := operationTimestampMillis(expiresAfter)
+	if err != nil {
+		return 0, err
+	}
 	statement, arguments, err := query.NewWorkspaceSelectBuilder(s.dialect, BreakGlassTableName, workspaceID).
-		Projections(query.Project(query.CountAll())).Where(query.And(query.Equal("state", state), query.GreaterThan("expires_at", expiresAfter))).Build()
+		Projections(query.Project(query.CountAll())).Where(query.And(query.Equal("state", state), query.GreaterThan("expires_at", expiresAfterMillis))).Build()
 	if err != nil {
 		return 0, err
 	}
@@ -152,7 +156,7 @@ func (s *SQLStore) RevokeBreakGlass(ctx context.Context, value BreakGlassGrant, 
 		return false, fmt.Errorf("break-glass expected state and revision are required")
 	}
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(s.dialect, BreakGlassTableName, value.WorkspaceID).
-		Set("state", value.State).Set("revision", value.Revision).Set("updated_at", value.UpdatedAt).Set("revoked_at", value.RevokedAt).
+		Set("state", value.State).Set("revision", value.Revision).Set("updated_at", mustOperationTimestampMillis(value.UpdatedAt)).Set("revoked_at", mustOperationTimestampMillis(value.RevokedAt)).
 		Set("revoked_by", value.RevokedBy).Set("revocation_note", value.RevocationNote).
 		Where(query.And(query.Equal("id", value.ID), query.Equal("state", expectedState), query.Equal("revision", expectedRevision))).Build()
 	if err != nil {
@@ -197,12 +201,17 @@ func (value BreakGlassGrant) validate() error {
 	if value.Revision < 1 || !json.Valid(value.ApproverIDsJSON) {
 		return fmt.Errorf("break-glass revision or approver JSON is invalid")
 	}
+	for name, timestamp := range map[string]string{"expires_at": value.ExpiresAt, "created_at": value.CreatedAt, "updated_at": value.UpdatedAt, "revoked_at": value.RevokedAt} {
+		if _, err := operationTimestampMillis(timestamp); err != nil {
+			return fmt.Errorf("break-glass %s: %w", name, err)
+		}
+	}
 	return nil
 }
 
 func breakGlassValues(value BreakGlassGrant) []any {
 	return []any{value.ID, value.WorkspaceID, value.State, value.ActorID, string(value.ApproverIDsJSON), value.Reason, value.IncidentRef, value.AlertTarget,
-		value.AuditEventID, value.ExpiresAt, value.Revision, value.CreatedAt, value.UpdatedAt, value.RevokedAt, value.RevokedBy, value.RevocationNote}
+		value.AuditEventID, mustOperationTimestampMillis(value.ExpiresAt), value.Revision, mustOperationTimestampMillis(value.CreatedAt), mustOperationTimestampMillis(value.UpdatedAt), mustOperationTimestampMillis(value.RevokedAt), value.RevokedBy, value.RevocationNote}
 }
 
 func breakGlassColumnsWithoutWorkspace() []string {
@@ -217,12 +226,14 @@ func breakGlassValuesWithoutWorkspace(value BreakGlassGrant) []any {
 func scanBreakGlass(scanner scanner) (BreakGlassGrant, error) {
 	var value BreakGlassGrant
 	var approvers string
+	var expiresAt, createdAt, updatedAt, revokedAt int64
 	err := scanner.Scan(&value.ID, &value.WorkspaceID, &value.State, &value.ActorID, &approvers, &value.Reason, &value.IncidentRef, &value.AlertTarget,
-		&value.AuditEventID, &value.ExpiresAt, &value.Revision, &value.CreatedAt, &value.UpdatedAt, &value.RevokedAt, &value.RevokedBy, &value.RevocationNote)
+		&value.AuditEventID, &expiresAt, &value.Revision, &createdAt, &updatedAt, &revokedAt, &value.RevokedBy, &value.RevocationNote)
 	if err != nil {
 		return value, err
 	}
 	value.ApproverIDsJSON = json.RawMessage(approvers)
+	value.ExpiresAt, value.CreatedAt, value.UpdatedAt, value.RevokedAt = operationTimestampText(expiresAt), operationTimestampText(createdAt), operationTimestampText(updatedAt), operationTimestampText(revokedAt)
 	if !json.Valid(value.ApproverIDsJSON) {
 		return BreakGlassGrant{}, fmt.Errorf("break-glass approver JSON is invalid")
 	}

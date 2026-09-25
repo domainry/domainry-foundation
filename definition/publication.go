@@ -56,7 +56,7 @@ func (s Store) Publish(ctx context.Context, command PublishCommand) (PublishResu
 }
 
 func (s Store) publish(ctx context.Context, executor DBTX, command PublishCommand) (PublishResult, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC().UnixMilli()
 	definitionID := s.definitionID(command.Owner, command.ResourceType, command.ResourceKey)
 	versionID, err := s.ensureVersion(ctx, executor, versionValue{
 		DefinitionID: definitionID, InstallationID: s.installationID, Owner: command.Owner,
@@ -149,7 +149,7 @@ func (s Store) Disable(ctx context.Context, command DisableCommand) error {
 		return &Error{StatusCode: 400, Code: "metadata.definition_disable_invalid"}
 	}
 	disable := func(executor DBTX) error {
-		now := time.Now().UTC().Format(time.RFC3339Nano)
+		now := time.Now().UTC().UnixMilli()
 		statement, args, buildErr := query.NewUpdateBuilder(s.dialect, TableName).
 			Set("status", "disabled").Set("disabled_at", now).Set("disabled_by", disabledBy).Set("updated_at", now).
 			Where(query.And(
@@ -214,7 +214,8 @@ func (s Store) GetVersion(ctx context.Context, value VersionQuery) (Version, boo
 	}
 	var result Version
 	var payload string
-	err = ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, args...).Scan(&result.ID, &result.Owner, &result.ResourceType, &result.ResourceKey, &result.SchemaVersion, &result.SchemaHash, &payload, &result.CreatedAt)
+	var createdAt int64
+	err = ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, args...).Scan(&result.ID, &result.Owner, &result.ResourceType, &result.ResourceKey, &result.SchemaVersion, &result.SchemaHash, &payload, &createdAt)
 	if err == sql.ErrNoRows {
 		return Version{}, false, nil
 	}
@@ -222,6 +223,7 @@ func (s Store) GetVersion(ctx context.Context, value VersionQuery) (Version, boo
 		return Version{}, false, err
 	}
 	result.Payload = json.RawMessage(payload)
+	result.CreatedAt = definitionTimestampText(createdAt)
 	return result, true, nil
 }
 
@@ -256,10 +258,12 @@ func (s Store) ListVersions(ctx context.Context, value VersionListQuery) ([]Vers
 	for rows.Next() {
 		var value Version
 		var payload string
-		if err := rows.Scan(&value.ID, &value.Owner, &value.ResourceType, &value.ResourceKey, &value.SchemaVersion, &value.SchemaHash, &payload, &value.CreatedAt); err != nil {
+		var createdAt int64
+		if err := rows.Scan(&value.ID, &value.Owner, &value.ResourceType, &value.ResourceKey, &value.SchemaVersion, &value.SchemaHash, &payload, &createdAt); err != nil {
 			return nil, err
 		}
 		value.Payload = json.RawMessage(payload)
+		value.CreatedAt = definitionTimestampText(createdAt)
 		versions = append(versions, value)
 	}
 	return versions, rows.Err()

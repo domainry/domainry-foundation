@@ -229,7 +229,7 @@ func (s *Store) ClaimLease(ctx context.Context, executor DBTX, claim LeaseClaim)
 	if err != nil {
 		return Scope{}, false, err
 	}
-	value := Scope{Identity: claim.Identity, LeaseOwner: claim.LeaseOwner, LeaseExpiresAt: expires, LastStartedAt: now, UpdatedAt: now}
+	value := Scope{Identity: claim.Identity, LeaseOwner: claim.LeaseOwner, LeaseExpiresAt: timestampText(expires), LastStartedAt: timestampText(now), UpdatedAt: timestampText(now)}
 	if err := executor.QueryRowContext(ctx, lookup, lookupArgs...).Scan(&value.FencingToken); err != nil {
 		return Scope{}, false, err
 	}
@@ -250,7 +250,7 @@ func (s *Store) CompleteLease(ctx context.Context, executor Executor, completion
 	}
 	completedAt := timestamp(completion.CompletedAt)
 	statement, args, err := query.NewUpdateBuilder(s.dialect, TableName).
-		Set("lease_owner", "").Set("lease_expires_at", "").Set("last_completed_at", completedAt).
+		Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("last_completed_at", completedAt).
 		Set("checkpoint", completion.Checkpoint).Set("updated_at", completedAt).
 		Where(leasePredicate(completion.Identity, completion.LeaseOwner, completion.FencingToken)).Build()
 	if err != nil {
@@ -278,7 +278,7 @@ func (s *Store) FailLease(ctx context.Context, executor Executor, failure LeaseF
 	}
 	now := timestamp(failure.FailedAt)
 	statement, args, err := query.NewUpdateBuilder(s.dialect, TableName).
-		Set("lease_owner", "").Set("lease_expires_at", "").Set("last_error", failure.Cause.Error()).Set("updated_at", now).
+		Set("lease_owner", "").Set("lease_expires_at", int64(0)).Set("last_error", failure.Cause.Error()).Set("updated_at", now).
 		Where(leasePredicate(failure.Identity, failure.LeaseOwner, failure.FencingToken)).Build()
 	if err != nil {
 		return false, err
@@ -325,13 +325,15 @@ func (s *Store) LeaseStatus(ctx context.Context, source Queryer, identity Identi
 		return LeaseStatus{}, false, err
 	}
 	var value LeaseStatus
+	var leaseExpiresAt, lastStartedAt, lastCompletedAt int64
 	err = s.queryer(source).QueryRowContext(ctx, statement, args...).Scan(
-		&value.LeaseOwner, &value.LeaseExpiresAt, &value.FencingToken, &value.LastStartedAt,
-		&value.LastCompletedAt, &value.Checkpoint, &value.LastError,
+		&value.LeaseOwner, &leaseExpiresAt, &value.FencingToken, &lastStartedAt,
+		&lastCompletedAt, &value.Checkpoint, &value.LastError,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return LeaseStatus{}, false, nil
 	}
+	value.LeaseExpiresAt, value.LastStartedAt, value.LastCompletedAt = timestampText(leaseExpiresAt), timestampText(lastStartedAt), timestampText(lastCompletedAt)
 	return value, err == nil, err
 }
 
@@ -365,9 +367,9 @@ func (s *Store) CountLeases(ctx context.Context, source Queryer, owner, leaseOwn
 			query.Equal("lease_owner", leaseOwnerPrefix), query.Like("lease_owner", leaseOwnerPrefix+":%"), query.Like("lease_owner", leaseOwnerPrefix+"-%"),
 		))
 	}
-	nowText := timestamp(now)
-	live := query.Coalesce(query.Sum(query.CaseWhen(query.GreaterThan("lease_expires_at", nowText), 1).Else(0)), query.Value(0))
-	expired := query.Coalesce(query.Sum(query.CaseWhen(query.And(query.NotEqual("lease_expires_at", ""), query.LessThanOrEqual("lease_expires_at", nowText)), 1).Else(0)), query.Value(0))
+	nowMillis := timestamp(now)
+	live := query.Coalesce(query.Sum(query.CaseWhen(query.GreaterThan("lease_expires_at", nowMillis), 1).Else(0)), query.Value(0))
+	expired := query.Coalesce(query.Sum(query.CaseWhen(query.And(query.NotEqual("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", nowMillis)), 1).Else(0)), query.Value(0))
 	statement, args, err := query.NewSelectBuilder(s.dialect, TableName).
 		Projections(query.Project(live), query.Project(expired)).Where(predicate).Build()
 	if err != nil {
@@ -401,7 +403,8 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 	if err != nil {
 		return LeaseReleaseResult{}, false, err
 	}
-	var currentOwner, currentExpiresAt string
+	var currentOwner string
+	var currentExpiresAt int64
 	var currentToken int64
 	if err := executor.QueryRowContext(ctx, statement, args...).Scan(&currentOwner, &currentExpiresAt, &currentToken); errors.Is(err, sql.ErrNoRows) {
 		return LeaseReleaseResult{}, false, nil
@@ -411,10 +414,7 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 	if currentOwner != release.ExpectedLeaseOwner || currentToken != release.ExpectedFencingToken {
 		return LeaseReleaseResult{}, false, nil
 	}
-	expiresAt, err := time.Parse(time.RFC3339Nano, currentExpiresAt)
-	if err != nil {
-		return LeaseReleaseResult{}, false, fmt.Errorf("worker scope lease expiry is invalid: %w", err)
-	}
+	expiresAt := time.UnixMilli(currentExpiresAt).UTC()
 	eligibility := "expired"
 	if expiresAt.After(release.Now) {
 		if !release.AllowUnexpired {
@@ -423,7 +423,7 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 		eligibility = "verified_stuck"
 	}
 	statement, args, err = query.NewUpdateBuilder(s.dialect, TableName).
-		Set("lease_owner", "").Set("lease_expires_at", "").
+		Set("lease_owner", "").Set("lease_expires_at", int64(0)).
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).
 		Set("updated_at", timestamp(release.Now)).
 		Where(query.And(predicate, query.Equal("lease_owner", release.ExpectedLeaseOwner), query.Equal("fencing_token", release.ExpectedFencingToken))).Build()
@@ -460,19 +460,28 @@ func leasePredicate(identity Identity, owner string, fencingToken int64) query.P
 	return query.And(identityPredicate(identity), query.Equal("lease_owner", strings.TrimSpace(owner)), query.Equal("fencing_token", fencingToken))
 }
 
-func timestamp(value time.Time) string {
+func timestamp(value time.Time) int64 {
 	if value.IsZero() {
 		value = time.Now().UTC()
 	}
-	return value.UTC().Format(time.RFC3339Nano)
+	return value.UTC().UnixMilli()
+}
+
+func timestampText(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	return time.UnixMilli(value).UTC().Format(time.RFC3339Nano)
 }
 
 func scanScope(row interface{ Scan(...any) error }) (Scope, error) {
 	var value Scope
+	var leaseExpiresAt, lastStartedAt, lastCompletedAt, updatedAt int64
 	err := row.Scan(
 		&value.ID, &value.Owner, &value.ScopeKey, &value.Cursor, &value.Checkpoint, &value.Capacity,
-		&value.LeaseOwner, &value.LeaseExpiresAt, &value.FencingToken, &value.LastStartedAt,
-		&value.LastCompletedAt, &value.LastError, &value.UpdatedAt,
+		&value.LeaseOwner, &leaseExpiresAt, &value.FencingToken, &lastStartedAt,
+		&lastCompletedAt, &value.LastError, &updatedAt,
 	)
+	value.LeaseExpiresAt, value.LastStartedAt, value.LastCompletedAt, value.UpdatedAt = timestampText(leaseExpiresAt), timestampText(lastStartedAt), timestampText(lastCompletedAt), timestampText(updatedAt)
 	return value, err
 }

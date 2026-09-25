@@ -75,12 +75,12 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		defaulted("checkpoint", ormschema.BigInt(), 0),
 		defaulted("capacity", ormschema.BigInt(), 0),
 		defaulted("lease_owner", ormschema.TextKey(191), ""),
-		defaulted("lease_expires_at", ormschema.TextKey(40), ""),
+		defaulted("lease_expires_at", ormschema.BigInt(), 0),
 		defaulted("fencing_token", ormschema.BigInt(), 0),
-		defaulted("last_started_at", ormschema.TextKey(40), ""),
-		defaulted("last_completed_at", ormschema.TextKey(40), ""),
+		defaulted("last_started_at", ormschema.BigInt(), 0),
+		defaulted("last_completed_at", ormschema.BigInt(), 0),
 		required("last_error", ormschema.LongText()),
-		defaulted("updated_at", ormschema.TextKey(40), ""),
+		defaulted("updated_at", ormschema.BigInt(), 0),
 	).PrimaryKey("id").Unique("owner", "scope_key").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", TableName, err)
