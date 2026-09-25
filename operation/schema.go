@@ -101,7 +101,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		required("idempotency_key", ormschema.TextKey(compositeKeyLength)), required("request_fingerprint", ormschema.TextKey(255)), required("requested_by", ormschema.TextKey(255)),
 		required("reason", ormschema.LongText()), defaulted("reference", ormschema.TextKey(255), ""), required("status", ormschema.TextKey(statusKeyLength)),
 		required("status_url", ormschema.LongText()), required("result_json", ormschema.LongText()), required("metadata_json", ormschema.LongText()),
-		defaulted("error_code", ormschema.TextKey(255), ""), defaulted("failure_class", ormschema.TextKey(255), ""), defaulted("next_action", ormschema.BigInt(), 0),
+		defaulted("error_code", ormschema.TextKey(255), ""), defaulted("failure_class", ormschema.TextKey(255), ""), required("next_action", ormschema.LongText()),
 		required("related_ids_json", ormschema.LongText()), defaulted("correlation", ormschema.TextKey(255), ""), required("evidence_json", ormschema.LongText()),
 		defaulted("lease_owner", ormschema.TextKey(255), ""), defaulted("lease_expires_at", ormschema.BigInt(), 0), defaulted("fencing_token", ormschema.BigInt(), 0),
 		defaulted("expires_at", ormschema.BigInt(), 0), required("created_at", ormschema.BigInt()), defaulted("started_at", ormschema.BigInt(), 0),

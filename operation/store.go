@@ -158,11 +158,7 @@ func (s *SQLStore) List(ctx context.Context, filter ManagedQuery) ([]ManagedOper
 		predicate = and(predicate, query.In("status", values...))
 	}
 	if value := strings.TrimSpace(filter.NextActionBefore); value != "" {
-		millis, parseErr := operationTimestampMillis(value)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		predicate = and(predicate, query.NotEqual("next_action", int64(0)), query.LessThanOrEqual("next_action", millis))
+		predicate = and(predicate, query.NotEqual("next_action", ""), query.LessThanOrEqual("next_action", value))
 	}
 	if value := strings.TrimSpace(filter.LeaseExpiresBefore); value != "" {
 		millis, parseErr := operationTimestampMillis(value)
@@ -208,13 +204,9 @@ func (s *SQLStore) Transition(ctx context.Context, transition ManagedTransition)
 	if transition.ExpectedFencingToken > 0 {
 		predicate = and(predicate, query.Equal("lease_owner", strings.TrimSpace(transition.ExpectedLeaseOwner)), query.Equal("fencing_token", transition.ExpectedFencingToken))
 	}
-	nextAction, err := operationTimestampMillis(transition.NextAction)
-	if err != nil {
-		return ManagedOperation{}, false, err
-	}
 	builder := operationUpdate(s, transition.Identity.Scope.WorkspaceID).
 		Set("status", strings.TrimSpace(transition.Status)).Set("metadata_json", string(transition.Metadata)).Set("result_json", string(transition.Result)).
-		Set("error_code", strings.TrimSpace(transition.ErrorCode)).Set("next_action", nextAction).
+		Set("error_code", strings.TrimSpace(transition.ErrorCode)).Set("next_action", transition.NextAction).
 		Set("updated_at", transition.UpdatedAt.UTC().UnixMilli())
 	if transition.ClearLease {
 		builder = builder.Set("lease_owner", "").Set("lease_expires_at", int64(0))
@@ -250,7 +242,7 @@ func (s *SQLStore) ClaimManaged(ctx context.Context, claim ManagedClaim) (Manage
 		return ManagedOperation{}, false, err
 	}
 	due := query.Or(
-		query.And(query.Equal("status", strings.TrimSpace(claim.DueStatus)), query.NotEqual("next_action", int64(0)), query.LessThanOrEqual("next_action", now)),
+		query.And(query.Equal("status", strings.TrimSpace(claim.DueStatus)), query.NotEqual("next_action", ""), query.LessThanOrEqual("next_action", strings.TrimSpace(claim.Now))),
 		query.And(query.Equal("status", strings.TrimSpace(claim.ReclaimStatus)), query.NotEqual("lease_expires_at", int64(0)), query.LessThanOrEqual("lease_expires_at", now)),
 	)
 	predicate := and(identityPredicate(claim.Identity), due)
@@ -426,7 +418,7 @@ func operationValues(value ManagedOperation, startedAt, finishedAt, expiresAt st
 	return []any{
 		command.ID, command.Scope.WorkspaceID, command.Scope.SystemPurpose, command.Owner, command.Kind, command.ActionKey, "", command.Scope.ResourceType, command.Scope.ResourceID,
 		command.IdempotencyKey, command.RequestFingerprint, command.RequestedBy, command.Reason, command.Reference, value.Status, command.StatusURL,
-		string(value.Result), string(value.Metadata), value.ErrorCode, "", mustOperationTimestampMillis(value.NextAction), `[]`, "", `[]`, value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt),
+		string(value.Result), string(value.Metadata), value.ErrorCode, "", value.NextAction, `[]`, "", `[]`, value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt),
 		value.FencingToken, mustOperationTimestampMillis(expiresAt), command.CreatedAt.UTC().UnixMilli(), mustOperationTimestampMillis(startedAt), mustOperationTimestampMillis(finishedAt), value.UpdatedAt.UTC().UnixMilli(),
 	}
 }
@@ -436,7 +428,8 @@ type scanner interface{ Scan(...any) error }
 func scanOperation(row scanner) (ManagedOperation, error) {
 	var value ManagedOperation
 	var workspaceID, systemPurpose, parentID, status, resultJSON, metadataJSON, failureClass, relatedIDs, correlation, evidence string
-	var nextAction, leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
+	var nextAction string
+	var leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
 	command := &value.Command
 	err := row.Scan(
 		&command.ID, &workspaceID, &systemPurpose, &command.Owner, &command.Kind, &command.ActionKey, &parentID, &command.Scope.ResourceType, &command.Scope.ResourceID,
@@ -449,7 +442,7 @@ func scanOperation(row scanner) (ManagedOperation, error) {
 	}
 	command.Scope.WorkspaceID, command.Scope.SystemPurpose = workspaceID, systemPurpose
 	value.Status, value.Result, value.Metadata = status, json.RawMessage(resultJSON), json.RawMessage(metadataJSON)
-	value.NextAction = operationTimestampText(nextAction)
+	value.NextAction = nextAction
 	value.LeaseExpiresAt = operationTimestampText(leaseExpiresAt)
 	command.CreatedAt = time.UnixMilli(createdAt).UTC()
 	value.UpdatedAt = time.UnixMilli(updatedAt).UTC()

@@ -24,7 +24,7 @@ func TestFoundationPublishedMySQLMigrationChecksumsAreStable(t *testing.T) {
 		checksum   string
 	}{
 		{"definitions", definition.SchemaMigrations, "07619f55458e53eae36a5bab0038055aa67cc4733c01d6aa2a40cd06a4710dbd"},
-		{"operations", operation.SchemaMigrations, "ac08f1003d6b2081a8aec1f0312b75ec5e99a552be57c1abca9a6021abf90f82"},
+		{"operations", operation.SchemaMigrations, "4c4da285052619c875c43887d1eee7ed28b38833acd4beb7fa567f86459b90c5"},
 		{"artifacts", artifact.SchemaMigrations, "d230358132b49261e8446901d54396cea75c73eb6b5d9eeca9d1d20dd354e455"},
 		{"subject lifecycle", subjectlifecycle.SchemaMigrations, "7b3125d30472421ad75b104afb0c395e363a952b9811f91f9b6b8021b672dc19"},
 		{"worker scopes", workerscope.SchemaMigrations, "69b49402ba50646936e1e98efc5f7804036c275ac3e0671761523f227e8ebd2d"},

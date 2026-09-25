@@ -107,7 +107,7 @@ func (s *SQLStore) EraseRecords(ctx context.Context, workspaceID string, values 
 		}
 		statement, arguments, err := recordUpdate(s, workspaceID).
 			Set("requested_by", "anonymous").Set("reason", "").Set("reference", "").Set("result_json", "{}").Set("metadata_json", "{}").
-			Set("related_ids_json", "[]").Set("evidence_json", "[]").Set("next_action", int64(0)).Set("request_fingerprint", "").
+			Set("related_ids_json", "[]").Set("evidence_json", "[]").Set("next_action", "").Set("request_fingerprint", "").
 			Set("idempotency_key", value.IdempotencyKey).Set("status", "failed").Set("error_code", "runtime.subject_erased").
 			Set("lease_owner", "").Set("lease_expires_at", int64(0)).Where(query.Equal("id", value.ID)).Build()
 		if err != nil {
