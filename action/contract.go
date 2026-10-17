@@ -63,6 +63,18 @@ const (
 	LifecycleRetired    LifecycleStatus = "retired"
 )
 
+// PermissionGrantMode separates executable permissions from the way they may
+// enter a RoleSchema. Direct permissions may be selected by an administrator;
+// bundled permissions are installed only by a source-owned role/feature
+// bundle; internal permissions are reserved for platform-managed principals.
+type PermissionGrantMode string
+
+const (
+	PermissionGrantDirect   PermissionGrantMode = "direct"
+	PermissionGrantBundled  PermissionGrantMode = "bundled"
+	PermissionGrantInternal PermissionGrantMode = "internal"
+)
+
 type HTTPBinding struct {
 	Method               string `json:"method"`
 	RouteTemplate        string `json:"route_template"`
@@ -83,14 +95,15 @@ type NonHTTPBinding struct {
 // current administrative enablement and audit timestamps belong to Identity's
 // current database snapshot, not this code-owned contract.
 type PermissionDefinition struct {
-	Key             string          `json:"key"`
-	Owner           string          `json:"owner"`
-	ResourceKey     string          `json:"resource_key"`
-	OperationKey    string          `json:"operation_key"`
-	Label           string          `json:"label"`
-	Description     string          `json:"description,omitempty"`
-	Category        string          `json:"category"`
-	LifecycleStatus LifecycleStatus `json:"lifecycle_status"`
+	Key             string              `json:"key"`
+	Owner           string              `json:"owner"`
+	ResourceKey     string              `json:"resource_key"`
+	OperationKey    string              `json:"operation_key"`
+	Label           string              `json:"label"`
+	Description     string              `json:"description,omitempty"`
+	Category        string              `json:"category"`
+	GrantMode       PermissionGrantMode `json:"grant_mode"`
+	LifecycleStatus LifecycleStatus     `json:"lifecycle_status"`
 }
 
 // ActionDefinition is the normalized executable authorization boundary. Each

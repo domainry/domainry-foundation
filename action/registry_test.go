@@ -116,6 +116,7 @@ func TestRegistryRequiresActionPermissionIdentity(t *testing.T) {
 	}{
 		{name: "key", mutate: func(value *ActionDefinition) { value.Permission.Key = "orders.other" }, want: "must equal"},
 		{name: "owner", mutate: func(value *ActionDefinition) { value.Permission.Owner = "other:owner" }, want: "cannot own"},
+		{name: "grant mode", mutate: func(value *ActionDefinition) { value.Permission.GrantMode = "public" }, want: "unsupported grant mode"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -125,6 +126,20 @@ func TestRegistryRequiresActionPermissionIdentity(t *testing.T) {
 				t.Fatalf("error=%v want=%q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestPermissionGrantModeDefaultsToDirect(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(permissionAction("orders.read", HTTPBinding{Method: "GET", RouteTemplate: "/orders"})); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Freeze(); err != nil {
+		t.Fatal(err)
+	}
+	definition, found := registry.Definition("orders.read")
+	if !found || definition.Permission == nil || definition.Permission.GrantMode != PermissionGrantDirect {
+		t.Fatalf("definition=%#v found=%t", definition, found)
 	}
 }
 

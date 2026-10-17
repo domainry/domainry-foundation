@@ -95,6 +95,10 @@ func normalizeDefinition(source ActionDefinition) ActionDefinition {
 		permission.Label = strings.TrimSpace(permission.Label)
 		permission.Description = strings.TrimSpace(permission.Description)
 		permission.Category = strings.TrimSpace(permission.Category)
+		permission.GrantMode = PermissionGrantMode(strings.TrimSpace(string(permission.GrantMode)))
+		if permission.GrantMode == "" {
+			permission.GrantMode = PermissionGrantDirect
+		}
 	}
 	for index := range definition.AssuranceRequired {
 		definition.AssuranceRequired[index] = strings.TrimSpace(definition.AssuranceRequired[index])
@@ -260,6 +264,11 @@ func validatePermissionDefinition(action ActionDefinition, permission Permission
 	}
 	if permission.Key != permission.ResourceKey+"."+permission.OperationKey {
 		return fmt.Errorf("action %q permission resource and operation must compose its key", action.Key)
+	}
+	switch permission.GrantMode {
+	case PermissionGrantDirect, PermissionGrantBundled, PermissionGrantInternal:
+	default:
+		return fmt.Errorf("action %q permission %q has unsupported grant mode %q", action.Key, permission.Key, permission.GrantMode)
 	}
 	if permission.LifecycleStatus != LifecycleActive && permission.LifecycleStatus != LifecycleRetired {
 		return fmt.Errorf("action %q permission %q has unsupported lifecycle status %q", action.Key, permission.Key, permission.LifecycleStatus)
