@@ -129,7 +129,7 @@ func TestRegistryRequiresActionPermissionIdentity(t *testing.T) {
 	}
 }
 
-func TestPermissionGrantModeDefaultsToDirect(t *testing.T) {
+func TestPermissionGrantModeDefaultsToInternal(t *testing.T) {
 	registry := NewRegistry()
 	if err := registry.Register(permissionAction("orders.read", HTTPBinding{Method: "GET", RouteTemplate: "/orders"})); err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestPermissionGrantModeDefaultsToDirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	definition, found := registry.Definition("orders.read")
-	if !found || definition.Permission == nil || definition.Permission.GrantMode != PermissionGrantDirect {
+	if !found || definition.Permission == nil || definition.Permission.GrantMode != PermissionGrantInternal {
 		t.Fatalf("definition=%#v found=%t", definition, found)
 	}
 }

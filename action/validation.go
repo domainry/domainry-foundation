@@ -97,7 +97,7 @@ func normalizeDefinition(source ActionDefinition) ActionDefinition {
 		permission.Category = strings.TrimSpace(permission.Category)
 		permission.GrantMode = PermissionGrantMode(strings.TrimSpace(string(permission.GrantMode)))
 		if permission.GrantMode == "" {
-			permission.GrantMode = PermissionGrantDirect
+			permission.GrantMode = PermissionGrantInternal
 		}
 	}
 	for index := range definition.AssuranceRequired {
