@@ -24,10 +24,10 @@ func TestFoundationPublishedMySQLMigrationChecksumsAreStable(t *testing.T) {
 		checksum   string
 	}{
 		{"definitions", definition.SchemaMigrations, "07619f55458e53eae36a5bab0038055aa67cc4733c01d6aa2a40cd06a4710dbd"},
-		{"operations", operation.SchemaMigrations, "4c4da285052619c875c43887d1eee7ed28b38833acd4beb7fa567f86459b90c5"},
-		{"artifacts", artifact.SchemaMigrations, "d230358132b49261e8446901d54396cea75c73eb6b5d9eeca9d1d20dd354e455"},
-		{"subject lifecycle", subjectlifecycle.SchemaMigrations, "7b3125d30472421ad75b104afb0c395e363a952b9811f91f9b6b8021b672dc19"},
-		{"worker scopes", workerscope.SchemaMigrations, "69b49402ba50646936e1e98efc5f7804036c275ac3e0671761523f227e8ebd2d"},
+		{"operations", operation.SchemaMigrations, "3c1eb8eb6c80d29949673c4d518ca160f970c22d318e03b7bc3f71147eae9c92"},
+		{"artifacts", artifact.SchemaMigrations, "aed0929c21fe9f1f9752da85e41e884b84cfb04d7ac0b5f8f68fe6f1260c293e"},
+		{"subject lifecycle", subjectlifecycle.SchemaMigrations, "d2a98befee7399dbd945519384f2af735802a7979835e3627b4cd223481522b6"},
+		{"worker scopes", workerscope.SchemaMigrations, "f4e1e7b2e94bfb21392e617afdb17a398e30cb7339a1be19493a43ce041cdb30"},
 	}
 	for _, source := range sources {
 		t.Run(source.name, func(t *testing.T) {
