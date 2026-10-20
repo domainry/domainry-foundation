@@ -59,6 +59,9 @@ func (recorder *httpStatusRecorder) WriteHeader(status int) {
 	}
 	recorder.status = status
 	recorder.wroteHeader = true
+	if status >= http.StatusBadRequest && recorder.errorKind == "" {
+		recorder.RecordError(HTTPErrorKind(status), defaultHTTPErrorCode(status))
+	}
 	recorder.ResponseWriter.WriteHeader(status)
 }
 
@@ -121,6 +124,27 @@ func HTTPErrorKind(status int) string {
 		return "unavailable"
 	default:
 		return "internal"
+	}
+}
+
+func defaultHTTPErrorCode(status int) string {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
+		return "http.bad_request"
+	case http.StatusUnauthorized:
+		return "http.unauthorized"
+	case http.StatusForbidden:
+		return "http.forbidden"
+	case http.StatusNotFound:
+		return "http.not_found"
+	case http.StatusConflict, http.StatusPreconditionFailed:
+		return "http.conflict"
+	case http.StatusTooManyRequests:
+		return "http.rate_limited"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return "http.dependency_unavailable"
+	default:
+		return "http.server_error"
 	}
 }
 

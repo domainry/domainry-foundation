@@ -141,3 +141,23 @@ func TestRecordHTTPStatusErrorPublishesStableClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestHTTPServerMiddlewareClassifiesUnannotatedModuleErrors(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previousLogger := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previousLogger) })
+
+	handler := HTTPServerMiddleware(HTTPServerConfig{}, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusForbidden)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/module", nil))
+	entries := observed.FilterMessage("http_request").All()
+	if len(entries) != 1 {
+		t.Fatalf("entries=%#v", entries)
+	}
+	fields := entries[0].ContextMap()
+	if fields["error_kind"] != "forbidden" || fields["error_code"] != "http.forbidden" {
+		t.Fatalf("fields=%#v", fields)
+	}
+}
