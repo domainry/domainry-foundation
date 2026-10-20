@@ -105,8 +105,22 @@ func parseEnvironmentHeaders(raw string) map[string]string {
 func Initialize(ctx context.Context, cfg Config) (Shutdown, error) {
 	otel.SetTextMapPropagator(w3cPropagator)
 	exporterName := strings.ToLower(strings.TrimSpace(cfg.Exporter))
+	res := resource.NewWithAttributes("",
+		semconv.ServiceName(strings.TrimSpace(cfg.ServiceName)),
+		semconv.ServiceVersion(strings.TrimSpace(cfg.ServiceVersion)),
+	)
 	if exporterName == "" || exporterName == "off" || exporterName == ExporterDisabled {
-		return func(context.Context) error { return nil }, nil
+		// A real SDK provider is still required when export is disabled. The
+		// OpenTelemetry no-op provider preserves the remote parent SpanID instead
+		// of creating a local Client/Server SpanID, which makes process logs point
+		// at the wrong hop. NeverSample keeps this propagation-only mode cheap
+		// while still producing correct local span identities.
+		provider := sdktrace.NewTracerProvider(
+			sdktrace.WithResource(res),
+			sdktrace.WithSampler(sdktrace.NeverSample()),
+		)
+		otel.SetTracerProvider(provider)
+		return provider.Shutdown, nil
 	}
 	if exporterName == "otlp" {
 		exporterName = ExporterOTLPHTTP
@@ -131,10 +145,6 @@ func Initialize(ctx context.Context, cfg Config) (Shutdown, error) {
 	if err != nil {
 		return nil, fmt.Errorf("initialize OTLP HTTP trace exporter: %w", err)
 	}
-	res := resource.NewWithAttributes("",
-		semconv.ServiceName(strings.TrimSpace(cfg.ServiceName)),
-		semconv.ServiceVersion(strings.TrimSpace(cfg.ServiceVersion)),
-	)
 	ratio := cfg.SampleRatio
 	if ratio <= 0 {
 		ratio = 1

@@ -144,6 +144,31 @@ func TestHTTPPropagationRejectsInvalidCorrelationAndCreatesAttemptSpans(t *testi
 	}
 }
 
+func TestDisabledExporterStillCreatesLocalServerSpanIdentity(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	shutdown, err := Initialize(t.Context(), Config{ServiceName: "test.saas", ServiceVersion: "test", Exporter: ExporterDisabled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = shutdown(t.Context())
+		otel.SetTracerProvider(previousProvider)
+	})
+
+	header := http.Header{}
+	header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	ctx, span := StartHTTPServerSpan(t.Context(), header, "test.server", "GET /discovery", http.MethodGet)
+	local := trace.SpanContextFromContext(ctx)
+	span.End()
+
+	if local.TraceID().String() != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("trace id=%s", local.TraceID())
+	}
+	if local.SpanID().String() == "00f067aa0ba902b7" || !local.SpanID().IsValid() || local.IsRemote() {
+		t.Fatalf("local server span context=%v", local)
+	}
+}
+
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (roundTrip roundTripperFunc) RoundTrip(request *http.Request) (*http.Response, error) {
