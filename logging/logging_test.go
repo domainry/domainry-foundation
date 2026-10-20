@@ -126,6 +126,28 @@ func TestFromContextAddsRequestID(t *testing.T) {
 	}
 }
 
+func TestHostedModuleChildrenShareProcessSink(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previous := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+
+	for _, module := range []string{"identity", "notification"} {
+		ctx := requestcontext.WithRequestID(context.Background(), "req-"+module)
+		FromContext(ctx).Info("module_event", zap.String("owner", module))
+	}
+	entries := observed.FilterMessage("module_event").All()
+	if len(entries) != 2 {
+		t.Fatalf("shared sink entries=%#v", entries)
+	}
+	for index, owner := range []string{"identity", "notification"} {
+		fields := entries[index].ContextMap()
+		if fields["owner"] != owner || fields["request_id"] != "req-"+owner {
+			t.Fatalf("entry %d fields=%#v", index, fields)
+		}
+	}
+}
+
 func TestFieldsAreFilteredAndStable(t *testing.T) {
 	fields := Fields(map[string]any{" ": "ignored", "z": 1, "empty": "", "a": true})
 	if len(fields) != 2 || fields[0].Key != "a" || fields[1].Key != "z" {
