@@ -1,10 +1,12 @@
 package telemetry
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/domainry/domainry-foundation/logging"
@@ -42,6 +44,13 @@ type httpStatusRecorder struct {
 	wroteHeader bool
 	errorKind   string
 	errorCode   string
+}
+
+type httpRouteStateKey struct{}
+
+type httpRouteState struct {
+	mu    sync.RWMutex
+	route string
 }
 
 func (recorder *httpStatusRecorder) WriteHeader(status int) {
@@ -108,7 +117,8 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 			correlationID = requestID
 		}
 
-		ctx := ExtractHTTPContext(request.Context(), request.Header)
+		routeState := &httpRouteState{}
+		ctx := context.WithValue(ExtractHTTPContext(request.Context(), request.Header), httpRouteStateKey{}, routeState)
 		ctx = requestcontext.WithRequestID(ctx, requestID)
 		ctx = requestcontext.WithCorrelationID(ctx, correlationID)
 		ctx = requestcontext.WithWorkspaceID(ctx, strings.TrimSpace(request.Header.Get("X-Workspace-ID")))
@@ -184,8 +194,53 @@ func HTTPRoutePattern(request *http.Request) string {
 	if request == nil {
 		return "unmatched"
 	}
-	pattern := strings.TrimSpace(request.Pattern)
-	if prefix := request.Method + " "; strings.HasPrefix(pattern, prefix) {
+	pattern := ""
+	if state, ok := request.Context().Value(httpRouteStateKey{}).(*httpRouteState); ok && state != nil {
+		state.mu.RLock()
+		pattern = state.route
+		state.mu.RUnlock()
+	}
+	if pattern == "" {
+		pattern = strings.TrimSpace(request.Pattern)
+	}
+	return normalizedHTTPRoutePattern(request.Method, pattern)
+}
+
+// RecordHTTPRoute publishes the source-owned route template selected by a
+// manual or nested router to the outer process observability boundary. Raw URL
+// paths must never be passed here.
+func RecordHTTPRoute(request *http.Request, pattern string) {
+	if request == nil {
+		return
+	}
+	pattern = normalizedHTTPRoutePattern(request.Method, pattern)
+	if pattern == "unmatched" {
+		return
+	}
+	state, ok := request.Context().Value(httpRouteStateKey{}).(*httpRouteState)
+	if !ok || state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.route = pattern
+	state.mu.Unlock()
+}
+
+// HTTPRoute wraps one already-selected route handler. It only records the
+// bounded template; span completion and access logging remain outer-owned.
+func HTTPRoute(pattern string, next http.Handler) http.Handler {
+	if next == nil {
+		next = http.NotFoundHandler()
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		RecordHTTPRoute(request, pattern)
+		next.ServeHTTP(writer, request)
+	})
+}
+
+func normalizedHTTPRoutePattern(method, pattern string) string {
+	pattern = strings.TrimSpace(pattern)
+	if prefix := strings.TrimSpace(method) + " "; strings.HasPrefix(pattern, prefix) {
 		pattern = strings.TrimSpace(strings.TrimPrefix(pattern, prefix))
 	}
 	if pattern == "" || len(pattern) > 256 || strings.ContainsAny(pattern, "?\r\n") || !strings.HasPrefix(pattern, "/") {

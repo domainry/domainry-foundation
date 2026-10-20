@@ -94,3 +94,19 @@ func TestHTTPRoutePatternRejectsUnmatchedAndRawInput(t *testing.T) {
 		t.Fatalf("route=%q", route)
 	}
 }
+
+func TestHTTPServerMiddlewareUsesRouteRecordedByManualRouter(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previousLogger := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previousLogger) })
+	handler := HTTPServerMiddleware(HTTPServerConfig{ListenerGroup: "public"}, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		RecordHTTPRoute(request, "GET /todo/v1/discovery")
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/todo/v1/discovery?token=hidden", nil))
+	entries := observed.FilterMessage("http_request").All()
+	if len(entries) != 1 || entries[0].ContextMap()["route"] != "/todo/v1/discovery" {
+		t.Fatalf("entries=%#v", entries)
+	}
+}
