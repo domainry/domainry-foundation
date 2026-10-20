@@ -56,6 +56,16 @@ func (e *AppError) Error() string {
 
 func (e *AppError) Unwrap() error { return e.Err }
 
+// ApplicationErrorKind exposes the transport-independent failure class to
+// process-owned observability without requiring SDK error types to depend on
+// this package's concrete AppError implementation.
+func (e *AppError) ApplicationErrorKind() string {
+	if e == nil {
+		return ""
+	}
+	return string(e.Kind)
+}
+
 func (e *AppError) ErrorCode() string { return strings.TrimSpace(e.Code) }
 
 func (e *AppError) ErrorParams() map[string]string {

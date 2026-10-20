@@ -39,6 +39,32 @@ func TestObserveTickLogsStableFailureOnce(t *testing.T) {
 	}
 }
 
+func TestObserveTickClassifiesRawFailureWithWorkerIdentity(t *testing.T) {
+	core, observed := observer.New(zapcore.WarnLevel)
+	previous := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	defer zap.ReplaceGlobals(previous)
+
+	raw := errors.New("database secret")
+	_, err := observeTick(t.Context(), Identity{Owner: "data_exchange", Name: "job_processor"}, "tick", func(context.Context) (TickResult, error) {
+		return TickResult{}, raw
+	})
+	if !errors.Is(err, raw) {
+		t.Fatalf("raw cause was not preserved: %v", err)
+	}
+	entries := observed.All()
+	if len(entries) != 1 {
+		t.Fatalf("entries=%#v", entries)
+	}
+	fields := entries[0].ContextMap()
+	if fields["error_code"] != "backend.data_exchange.job_processor_tick_failed" || fields["error_kind"] != "internal" {
+		t.Fatalf("fields=%#v", fields)
+	}
+	if strings.Contains(fmt.Sprint(fields), "secret") {
+		t.Fatalf("raw error leaked: %#v", fields)
+	}
+}
+
 func TestObserveTickPanicDoesNotLogPanicValue(t *testing.T) {
 	core, observed := observer.New(zapcore.ErrorLevel)
 	previous := zap.L()

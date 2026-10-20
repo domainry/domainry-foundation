@@ -95,6 +95,35 @@ func RecordHTTPError(writer http.ResponseWriter, kind, code string) {
 	}
 }
 
+// RecordHTTPStatusError maps the already-selected HTTP response status to the
+// closed application error vocabulary and attaches its stable code to the
+// outer access event. Module-owned response writers call this immediately
+// before WriteHeader; it never logs and never accepts raw error text.
+func RecordHTTPStatusError(writer http.ResponseWriter, status int, code string) {
+	RecordHTTPError(writer, HTTPErrorKind(status), code)
+}
+
+// HTTPErrorKind is the one status-to-observability mapping shared by Runtime,
+// hosted modules and independent SaaS processes.
+func HTTPErrorKind(status int) string {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
+		return "bad_request"
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "forbidden"
+	case http.StatusNotFound:
+		return "not_found"
+	case http.StatusConflict, http.StatusPreconditionFailed:
+		return "conflict"
+	case http.StatusTooManyRequests:
+		return "rate_limited"
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return "unavailable"
+	default:
+		return "internal"
+	}
+}
+
 // HTTPServerMiddleware owns request identity, W3C extraction, the Server span,
 // panic recovery and the single terminal access event for a standalone Go
 // process. It must wrap the final listener handler, not an individual router.

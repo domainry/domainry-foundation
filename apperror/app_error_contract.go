@@ -29,6 +29,10 @@ func KindOf(err error) ErrorKind {
 	if errors.As(err, &appErr) {
 		return appErr.Kind
 	}
+	var classified interface{ ApplicationErrorKind() string }
+	if errors.As(err, &classified) {
+		return NormalizeKind(classified.ApplicationErrorKind())
+	}
 	return KindInternal
 }
 
@@ -36,6 +40,12 @@ func CodeOf(err error) string {
 	var appErr *AppError
 	if errors.As(err, &appErr) {
 		return appErr.ErrorCode()
+	}
+	var coded interface{ ErrorCode() string }
+	if errors.As(err, &coded) {
+		if code := strings.TrimSpace(coded.ErrorCode()); IsI18nCode(code) {
+			return code
+		}
 	}
 	return DefaultCode(KindInternal)
 }
@@ -45,7 +55,34 @@ func ParamsOf(err error) map[string]string {
 	if errors.As(err, &appErr) {
 		return appErr.ErrorParams()
 	}
+	var parameterized interface{ ErrorParams() map[string]string }
+	if errors.As(err, &parameterized) {
+		return cloneParams(parameterized.ErrorParams())
+	}
 	return nil
+}
+
+// NormalizeKind accepts only the closed application failure vocabulary. The
+// aliases "invalid", "unauthenticated" and "unauthorized" are normalized at
+// the boundary because several deployment-neutral SDKs use those terms while
+// Foundation deliberately exposes no authentication-specific HTTP kind.
+func NormalizeKind(value string) ErrorKind {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case string(KindBadRequest), "invalid":
+		return KindBadRequest
+	case string(KindForbidden), "unauthenticated", "unauthorized":
+		return KindForbidden
+	case string(KindNotFound):
+		return KindNotFound
+	case string(KindConflict):
+		return KindConflict
+	case string(KindRateLimited):
+		return KindRateLimited
+	case string(KindUnavailable):
+		return KindUnavailable
+	default:
+		return KindInternal
+	}
 }
 
 func NormalizeCode(kind ErrorKind, code string) string {

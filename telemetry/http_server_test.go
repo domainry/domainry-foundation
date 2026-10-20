@@ -110,3 +110,34 @@ func TestHTTPServerMiddlewareUsesRouteRecordedByManualRouter(t *testing.T) {
 		t.Fatalf("entries=%#v", entries)
 	}
 }
+
+func TestRecordHTTPStatusErrorPublishesStableClassification(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previousLogger := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previousLogger) })
+	tests := []struct {
+		status int
+		kind   string
+	}{
+		{http.StatusBadRequest, "bad_request"},
+		{http.StatusForbidden, "forbidden"},
+		{http.StatusNotFound, "not_found"},
+		{http.StatusConflict, "conflict"},
+		{http.StatusTooManyRequests, "rate_limited"},
+		{http.StatusServiceUnavailable, "unavailable"},
+		{http.StatusInternalServerError, "internal"},
+	}
+	for _, test := range tests {
+		handler := HTTPServerMiddleware(HTTPServerConfig{}, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			RecordHTTPStatusError(writer, test.status, "module.failure")
+			writer.WriteHeader(test.status)
+		}))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/failure", nil))
+		entries := observed.FilterMessage("http_request").All()
+		entry := entries[len(entries)-1].ContextMap()
+		if entry["error_kind"] != test.kind || entry["error_code"] != "module.failure" {
+			t.Fatalf("status=%d fields=%#v", test.status, entry)
+		}
+	}
+}

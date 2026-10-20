@@ -195,6 +195,7 @@ func observeTick(ctx context.Context, identity Identity, operation string, tick 
 		} else if err != nil {
 			outcome = "error"
 			if !cancelledByProcess(ctx, err) {
+				err = classifyTickError(identity, operation, err)
 				retryable := ClassifyApplicationError(err).Retryable()
 				fields := []zap.Field{
 					zap.String("owner", identity.Owner),
@@ -225,6 +226,34 @@ func observeTick(ctx context.Context, identity Identity, operation string, tick 
 		result.Attempt = 0
 	}
 	return result, err
+}
+
+func classifyTickError(identity Identity, operation string, err error) error {
+	if err == nil || apperror.CodeOf(err) != apperror.DefaultCode(apperror.KindInternal) {
+		return err
+	}
+	code := "backend." + boundedCodeToken(identity.Owner) + "." + boundedCodeToken(identity.Name) + "_" + boundedCodeToken(operation) + "_failed"
+	return apperror.New(apperror.KindInternal, code, err, nil)
+}
+
+func boundedCodeToken(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	for _, char := range value {
+		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' || char == '_' {
+			builder.WriteRune(char)
+		} else if builder.Len() > 0 {
+			builder.WriteByte('_')
+		}
+	}
+	value = strings.Trim(builder.String(), "_")
+	if value == "" {
+		return "worker"
+	}
+	if len(value) > 64 {
+		return value[:64]
+	}
+	return value
 }
 
 func cancelledByProcess(ctx context.Context, err error) bool {
