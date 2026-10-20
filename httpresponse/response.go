@@ -60,6 +60,10 @@ func WriteJSON(writer http.ResponseWriter, status int, value any) {
 	if writer == nil {
 		return
 	}
+	if status == http.StatusNoContent {
+		writer.WriteHeader(status)
+		return
+	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		WriteError(writer, nil, Failure{Status: http.StatusInternalServerError, Code: "backend.response_write_failed", Cause: err})

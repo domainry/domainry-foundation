@@ -173,6 +173,28 @@ func TestHostedModuleChildrenShareProcessSink(t *testing.T) {
 	}
 }
 
+func TestRecordFailureUsesStableEventAndNeverRawErrorText(t *testing.T) {
+	core, observed := observer.New(zapcore.WarnLevel)
+	previous := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+
+	ctx := requestcontext.WithRequestID(context.Background(), "req-secondary")
+	RecordFailure(ctx, "audit_append_failed", fmt.Errorf("database password=private"), Failure{Stage: "audit_append", Dependency: "audit"})
+	RecordFailure(ctx, "user supplied event", fmt.Errorf("retry token=private"), Failure{Stage: "delivery", Retryable: true})
+
+	entries := observed.All()
+	if len(entries) != 2 || entries[0].Message != "audit_append_failed" || entries[0].Level != zapcore.ErrorLevel || entries[1].Message != "operational_failure" || entries[1].Level != zapcore.WarnLevel {
+		t.Fatalf("entries=%#v", entries)
+	}
+	for _, entry := range entries {
+		fields := entry.ContextMap()
+		if fields["request_id"] != "req-secondary" || fields["error_code"] != "backend.internal" || strings.Contains(fmt.Sprint(fields), "private") {
+			t.Fatalf("fields=%#v", fields)
+		}
+	}
+}
+
 func TestFieldsAreFilteredAndStable(t *testing.T) {
 	fields := Fields(map[string]any{" ": "ignored", "z": 1, "empty": "", "a": true})
 	if len(fields) != 2 || fields[0].Key != "a" || fields[1].Key != "z" {

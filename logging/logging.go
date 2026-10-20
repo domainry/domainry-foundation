@@ -173,6 +173,40 @@ func ErrorFields(err error, failure Failure) []zap.Field {
 	return fields
 }
 
+// RecordFailure records a secondary operational failure at the boundary that
+// deliberately decides not to return it to its caller. This keeps best-effort
+// audit, notification and cleanup failures visible without moving Logger
+// ownership into SDK contracts or serializing raw error text.
+func RecordFailure(ctx context.Context, event string, err error, failure Failure) {
+	if err == nil {
+		return
+	}
+	event = stableEventName(event)
+	fields := ErrorFields(err, failure)
+	if failure.Retryable {
+		FromContext(ctx).Warn(event, fields...)
+		return
+	}
+	FromContext(ctx).Error(event, fields...)
+}
+
+func stableEventName(event string) string {
+	event = strings.TrimSpace(event)
+	if event == "" || len(event) > 64 {
+		return "operational_failure"
+	}
+	for _, character := range event {
+		if character < 'a' || character > 'z' {
+			if character < '0' || character > '9' {
+				if character != '_' {
+					return "operational_failure"
+				}
+			}
+		}
+	}
+	return event
+}
+
 // Initialize installs the process logger as zap's global logger.
 func Initialize(config Config) (*zap.Logger, error) {
 	logger, err := New(config)

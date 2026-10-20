@@ -57,6 +57,38 @@ func TestWriteErrorUsesCanonicalShapeAndObservabilityClassification(t *testing.T
 	}
 }
 
+func TestWriteErrorCanonicalStatusMatrix(t *testing.T) {
+	for _, fixture := range []struct {
+		status int
+		kind   string
+		code   string
+	}{
+		{http.StatusBadRequest, "bad_request", "backend.request_invalid"},
+		{http.StatusUnauthorized, "forbidden", "auth.token_required"},
+		{http.StatusForbidden, "forbidden", "auth.permission_denied"},
+		{http.StatusNotFound, "not_found", "backend.route_not_found"},
+		{http.StatusConflict, "conflict", "backend.resource_conflict"},
+		{http.StatusTooManyRequests, "rate_limited", "backend.rate_limited"},
+		{http.StatusInternalServerError, "internal", "backend.internal"},
+	} {
+		t.Run(http.StatusText(fixture.status), func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writer := &observedWriter{ResponseRecorder: recorder}
+			request := httptest.NewRequest(http.MethodGet, "/", nil)
+			request = request.WithContext(requestcontext.WithRequestID(request.Context(), "req-matrix"))
+			WriteError(writer, request, Failure{Status: fixture.status, Code: fixture.code})
+
+			var response ErrorResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatal(err)
+			}
+			if recorder.Code != fixture.status || writer.kind != fixture.kind || response.Code != fixture.code || response.Message == "" || response.RequestID != "req-matrix" {
+				t.Fatalf("status=%d kind=%q response=%+v", recorder.Code, writer.kind, response)
+			}
+		})
+	}
+}
+
 func TestWriteErrorRedactsSensitiveParamsAndInternalDetails(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	writer := &observedWriter{ResponseRecorder: recorder}
@@ -107,6 +139,14 @@ func TestWriteJSONKeepsSuccessfulDTOUnwrapped(t *testing.T) {
 
 	if recorder.Code != http.StatusCreated || recorder.Body.String() != "{\"customer_id\":\"customer-one\"}\n" {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestWriteJSONKeepsNoContentBodyEmpty(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	WriteJSON(recorder, http.StatusNoContent, map[string]string{"ignored": "value"})
+	if recorder.Code != http.StatusNoContent || recorder.Body.Len() != 0 {
+		t.Fatalf("status=%d body=%q", recorder.Code, recorder.Body.String())
 	}
 }
 
