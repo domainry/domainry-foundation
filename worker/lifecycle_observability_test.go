@@ -60,6 +60,9 @@ func TestObserveTickClassifiesRawFailureWithWorkerIdentity(t *testing.T) {
 	if fields["error_code"] != "backend.data_exchange.job_processor_tick_failed" || fields["error_kind"] != "internal" {
 		t.Fatalf("fields=%#v", fields)
 	}
+	if !strings.Contains(fmt.Sprint(fields["stack"]), "TestObserveTickClassifiesRawFailureWithWorkerIdentity") {
+		t.Fatalf("source stack=%v", fields["stack"])
+	}
 	if strings.Contains(fmt.Sprint(fields), "secret") {
 		t.Fatalf("raw error leaked: %#v", fields)
 	}
@@ -82,7 +85,7 @@ func TestObserveTickPanicDoesNotLogPanicValue(t *testing.T) {
 		t.Fatalf("entries=%#v", entries)
 	}
 	fields := entries[0].ContextMap()
-	if fields["panic_type"] != "string" || strings.Contains(fmt.Sprint(fields), "authorization=secret") {
+	if fields["panic_type"] != "string" || fields["stack"] == nil || strings.Contains(fmt.Sprint(fields), "authorization=secret") {
 		t.Fatalf("panic fields=%#v", fields)
 	}
 }

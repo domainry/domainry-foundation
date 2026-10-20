@@ -3,9 +3,12 @@ package logging
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/domainry/domainry-foundation/apperror"
 	"github.com/domainry/domainry-foundation/idempotency"
 	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.uber.org/zap"
@@ -40,6 +43,28 @@ func TestNewReadsEnvironmentConfiguration(t *testing.T) {
 	}
 	if built.Sampling == nil || built.Sampling.Initial != defaultSamplingInitial || built.Sampling.Thereafter != defaultSamplingThereafter {
 		t.Fatalf("sampling=%+v", built.Sampling)
+	}
+	if !built.DisableStacktrace {
+		t.Fatal("automatic Zap stacktraces must remain disabled")
+	}
+}
+
+func TestErrorLogDoesNotIncludeAutomaticBoundaryStacktrace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runtime.log")
+	logger, err := New(Config{ServiceName: "runtime-test", OutputPaths: []string{path}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger.Error("classified_failure", zap.String("error_code", "backend.test.failed"))
+	if err := Sync(logger); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), `"stacktrace"`) || strings.Contains(string(contents), `"stack"`) {
+		t.Fatalf("automatic boundary stack leaked into error log: %s", contents)
 	}
 }
 
@@ -237,6 +262,20 @@ func TestErrorFieldsExcludeRawErrorTextAndIncludeStableFailureContext(t *testing
 	}
 	if values["failure_stage"] != "database_query" || values["dependency"] != "primary_database" || values["retryable"] != true {
 		t.Fatalf("failure fields=%v", values)
+	}
+	if !strings.Contains(fmt.Sprint(values["stack"]), "TestErrorFieldsExcludeRawErrorTextAndIncludeStableFailureContext") {
+		t.Fatalf("internal source stack=%v", values["stack"])
+	}
+}
+
+func TestErrorFieldsDoNotAttachStackToClassifiedExpectedFailure(t *testing.T) {
+	err := apperror.New(apperror.KindBadRequest, "backend.request.invalid", fmt.Errorf("invalid input"), nil)
+	fields := ErrorFields(err, Failure{Stage: "request_validation"})
+	core, observed := observer.New(zapcore.ErrorLevel)
+	zap.New(core).Error("failed", fields...)
+	values := observed.All()[0].ContextMap()
+	if _, exists := values["stack"]; exists {
+		t.Fatalf("expected failure contains stack=%v", values["stack"])
 	}
 }
 

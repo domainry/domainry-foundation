@@ -106,6 +106,10 @@ func zapConfig(config Config) (zap.Config, error) {
 	}
 
 	cfg := zap.NewProductionConfig()
+	// Error stacks are attached only when an unexpected internal error is first
+	// normalized. Zap's automatic stack points at the terminal logging boundary,
+	// so it is noisy for access logs and does not identify the failure origin.
+	cfg.DisableStacktrace = true
 	cfg.Level = zap.NewAtomicLevelAt(level)
 	cfg.Encoding = encoding
 	cfg.OutputPaths = []string{"stdout"}
@@ -149,9 +153,15 @@ func ErrorFields(err error, failure Failure) []zap.Field {
 	if err == nil {
 		return nil
 	}
+	if apperror.KindOf(err) == apperror.KindInternal && apperror.CodeOf(err) == apperror.DefaultCode(apperror.KindInternal) && apperror.StackOf(err) == "" {
+		err = apperror.FromError(apperror.KindInternal, err)
+	}
 	fields := []zap.Field{
 		zap.String("error_kind", string(apperror.KindOf(err))),
 		zap.String("error_code", apperror.CodeOf(err)),
+	}
+	if stack := apperror.StackOf(err); stack != "" {
+		fields = append(fields, zap.String("stack", stack))
 	}
 	if stage := strings.TrimSpace(failure.Stage); stage != "" {
 		fields = append(fields, zap.String("failure_stage", stage))

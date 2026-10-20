@@ -7,7 +7,11 @@ import (
 
 // New creates a normalized application error.
 func New(kind ErrorKind, code string, err error, params map[string]string) error {
-	return &AppError{Kind: kind, Code: NormalizeCode(kind, code), Params: cloneParams(params), Err: err}
+	appErr := &AppError{Kind: kind, Code: NormalizeCode(kind, code), Params: cloneParams(params), Err: err}
+	if kind == KindInternal && err != nil && CodeOf(err) == DefaultCode(KindInternal) && StackOf(err) == "" {
+		appErr.stack = captureStack(1)
+	}
+	return appErr
 }
 
 func FromError(kind ErrorKind, err error) error {
@@ -19,9 +23,9 @@ func FromError(kind ErrorKind, err error) error {
 		return err
 	}
 	if code, params, ok := codedDetails(err); ok {
-		return &AppError{Kind: kind, Code: code, Params: params, Err: err}
+		return New(kind, code, err, params)
 	}
-	return &AppError{Kind: kind, Code: DefaultCode(kind), Err: err}
+	return New(kind, DefaultCode(kind), err, nil)
 }
 
 func KindOf(err error) ErrorKind {

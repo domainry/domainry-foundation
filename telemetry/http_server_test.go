@@ -2,8 +2,11 @@ package telemetry
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/domainry/domainry-foundation/requestcontext"
@@ -139,6 +142,35 @@ func TestRecordHTTPStatusErrorPublishesStableClassification(t *testing.T) {
 		if entry["error_kind"] != test.kind || entry["error_code"] != "module.failure" {
 			t.Fatalf("status=%d fields=%#v", test.status, entry)
 		}
+	}
+}
+
+func TestHTTPServerSeparatesInternalSourceStackFromAccessLog(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previousLogger := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previousLogger) })
+
+	handler := HTTPServerMiddleware(HTTPServerConfig{ListenerGroup: "public"}, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		RecordHTTPStatusError(writer, http.StatusInternalServerError, "backend.widget.load_failed", errors.New("password=secret"))
+		writer.WriteHeader(http.StatusInternalServerError)
+	}))
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/widgets", nil))
+
+	diagnostics := observed.FilterMessage("http_internal_failure").All()
+	access := observed.FilterMessage("http_request").All()
+	if len(diagnostics) != 1 || len(access) != 1 {
+		t.Fatalf("diagnostics=%#v access=%#v", diagnostics, access)
+	}
+	diagnosticFields := diagnostics[0].ContextMap()
+	if diagnosticFields["error_code"] != "backend.widget.load_failed" || !strings.Contains(fmt.Sprint(diagnosticFields["stack"]), "TestHTTPServerSeparatesInternalSourceStackFromAccessLog") {
+		t.Fatalf("diagnostic fields=%#v", diagnosticFields)
+	}
+	if strings.Contains(fmt.Sprint(diagnosticFields), "password=secret") {
+		t.Fatalf("raw error leaked: %#v", diagnosticFields)
+	}
+	if _, exists := access[0].ContextMap()["stack"]; exists {
+		t.Fatalf("access log contains source stack=%#v", access[0].ContextMap())
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/domainry/domainry-foundation/apperror"
 	"github.com/domainry/domainry-foundation/logging"
 	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.opentelemetry.io/otel/attribute"
@@ -44,6 +45,7 @@ type httpStatusRecorder struct {
 	wroteHeader bool
 	errorKind   string
 	errorCode   string
+	internalErr error
 }
 
 type httpRouteStateKey struct{}
@@ -79,12 +81,29 @@ func (recorder *httpStatusRecorder) RecordError(kind, code string) {
 	recorder.errorCode = boundedDiagnostic(code)
 }
 
+func (recorder *httpStatusRecorder) RecordInternalError(err error) {
+	if recorder.internalErr == nil {
+		recorder.internalErr = err
+	}
+}
+
 // RecordHTTPError attaches stable classification to the outer access event.
-// It does not log and never accepts an original error or user-controlled text.
-func RecordHTTPError(writer http.ResponseWriter, kind, code string) {
+// An optional cause is retained only when it is an unclassified internal
+// failure, so the outer boundary can emit one source-stack diagnostic without
+// exposing raw error text.
+func RecordHTTPError(writer http.ResponseWriter, kind, code string, causes ...error) {
+	var internalErr error
+	if len(causes) > 0 && causes[0] != nil && boundedDiagnostic(kind) == string(apperror.KindInternal) && apperror.CodeOf(causes[0]) == apperror.DefaultCode(apperror.KindInternal) {
+		internalErr = apperror.New(apperror.KindInternal, code, causes[0], nil)
+	}
 	for writer != nil {
 		if recorder, ok := writer.(interface{ RecordError(string, string) }); ok {
 			recorder.RecordError(kind, code)
+		}
+		if internalErr != nil {
+			if recorder, ok := writer.(interface{ RecordInternalError(error) }); ok {
+				recorder.RecordInternalError(internalErr)
+			}
 		}
 		unwrapper, ok := writer.(interface{ Unwrap() http.ResponseWriter })
 		if !ok {
@@ -101,9 +120,10 @@ func RecordHTTPError(writer http.ResponseWriter, kind, code string) {
 // RecordHTTPStatusError maps the already-selected HTTP response status to the
 // closed application error vocabulary and attaches its stable code to the
 // outer access event. Module-owned response writers call this immediately
-// before WriteHeader; it never logs and never accepts raw error text.
-func RecordHTTPStatusError(writer http.ResponseWriter, status int, code string) {
-	RecordHTTPError(writer, HTTPErrorKind(status), code)
+// before WriteHeader. An optional cause follows RecordHTTPError's internal-only
+// diagnostic policy.
+func RecordHTTPStatusError(writer http.ResponseWriter, status int, code string, causes ...error) {
+	RecordHTTPError(writer, HTTPErrorKind(status), code, causes...)
 }
 
 // HTTPErrorKind is the one status-to-observability mapping shared by Runtime,
@@ -233,6 +253,16 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 			"error_code":     recorder.errorCode,
 		})
 		logger := logging.FromContext(request.Context())
+		if recorder.internalErr != nil {
+			failureFields := []zap.Field{
+				zap.String("listener_group", listenerGroup),
+				zap.String("method", request.Method),
+				zap.String("route", route),
+				zap.Int("status", recorder.status),
+			}
+			failureFields = append(failureFields, logging.ErrorFields(recorder.internalErr, logging.Failure{Stage: "http_handler"})...)
+			logger.Error("http_internal_failure", failureFields...)
+		}
 		if recorder.status >= http.StatusInternalServerError {
 			logger.Error("http_request", fields...)
 		} else {

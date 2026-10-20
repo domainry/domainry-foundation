@@ -19,6 +19,7 @@ type AppError struct {
 	Code   string
 	Params map[string]string
 	Err    error
+	stack  string
 }
 
 // CodedError carries a stable machine-readable error code without assigning an
@@ -55,6 +56,19 @@ func (e *AppError) Error() string {
 }
 
 func (e *AppError) Unwrap() error { return e.Err }
+
+// ErrorStack returns a bounded source stack captured when an unclassified
+// internal error first crossed into the application error contract. It never
+// contains the raw error text.
+func (e *AppError) ErrorStack() string {
+	if e == nil {
+		return ""
+	}
+	if e.stack != "" {
+		return e.stack
+	}
+	return StackOf(e.Err)
+}
 
 // ApplicationErrorKind exposes the transport-independent failure class to
 // process-owned observability without requiring SDK error types to depend on
