@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -219,7 +220,13 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 						if config.WritePanic != nil {
 							config.WritePanic(recorder, request)
 						} else {
-							http.Error(recorder, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+							recorder.Header().Set("Content-Type", "application/json; charset=utf-8")
+							recorder.WriteHeader(http.StatusInternalServerError)
+							_ = json.NewEncoder(recorder).Encode(struct {
+								Code      string `json:"code"`
+								Message   string `json:"message"`
+								RequestID string `json:"request_id"`
+							}{Code: "backend.internal", Message: http.StatusText(http.StatusInternalServerError), RequestID: requestID})
 						}
 					}
 				}

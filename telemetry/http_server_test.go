@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -76,6 +77,17 @@ func TestHTTPServerMiddlewareSuppressesSuccessfulProbeAndRecoversPanic(t *testin
 	handler.ServeHTTP(panicResponse, httptest.NewRequest(http.MethodGet, "/panic", nil))
 	if panicResponse.Code != http.StatusInternalServerError {
 		t.Fatalf("panic status=%d", panicResponse.Code)
+	}
+	var panicFailure struct {
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"request_id"`
+	}
+	if err := json.NewDecoder(panicResponse.Body).Decode(&panicFailure); err != nil {
+		t.Fatal(err)
+	}
+	if panicFailure.Code != "backend.internal" || panicFailure.Message != http.StatusText(http.StatusInternalServerError) || panicFailure.RequestID == "" {
+		t.Fatalf("panic failure=%+v", panicFailure)
 	}
 	if len(observed.FilterMessage("http_request").All()) != 1 || len(observed.FilterMessage("panic_recovered").All()) != 1 {
 		t.Fatalf("entries=%#v", observed.All())
