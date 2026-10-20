@@ -32,6 +32,23 @@ type Host struct {
 	started           atomic.Bool
 }
 
+type startupFailure struct {
+	err     error
+	failure logging.Failure
+}
+
+func (failure *startupFailure) Error() string { return failure.err.Error() }
+func (failure *startupFailure) Unwrap() error { return failure.err }
+
+// FailStartup preserves the concrete startup stage until Finish emits the one
+// terminal process_start_failed event.
+func FailStartup(err error, failure logging.Failure) error {
+	if err == nil {
+		return nil
+	}
+	return &startupFailure{err: err, failure: failure}
+}
+
 func Open(ctx context.Context, config Config) (*Host, error) {
 	serviceVersion := strings.TrimSpace(config.ServiceVersion)
 	if serviceVersion == "" {
@@ -45,6 +62,7 @@ func Open(ctx context.Context, config Config) (*Host, error) {
 	loggingConfig.ErrorOutputPaths = append([]string(nil), config.LoggerErrorOutputPaths...)
 	logger, err := logging.Initialize(loggingConfig)
 	if err != nil {
+		logging.ReportBootstrapFailure(config.ServiceName, err, logging.Failure{Stage: "logging_initialize"})
 		return nil, err
 	}
 	telemetryConfig := config.Telemetry
@@ -118,7 +136,12 @@ func (host *Host) Finish(ctx context.Context, fields map[string]any, runErr erro
 		if host.started.Load() {
 			logging.FromContext(ctx).Error("process_stopped", logging.ErrorFields(runErr, logging.Failure{Stage: "process_run"})...)
 		} else {
-			logging.ProcessStartFailed(ctx, runErr, logging.Failure{Stage: "process_start"})
+			failure := logging.Failure{Stage: "process_start"}
+			var startupErr *startupFailure
+			if errors.As(runErr, &startupErr) {
+				failure = startupErr.failure
+			}
+			logging.ProcessStartFailed(ctx, runErr, failure)
 		}
 	} else if host.started.Load() {
 		logging.ProcessStopped(ctx, fields)

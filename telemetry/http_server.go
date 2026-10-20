@@ -42,11 +42,12 @@ type HTTPServerConfig struct {
 
 type httpStatusRecorder struct {
 	http.ResponseWriter
-	status      int
-	wroteHeader bool
-	errorKind   string
-	errorCode   string
-	internalErr error
+	status       int
+	wroteHeader  bool
+	suppressBody bool
+	errorKind    string
+	errorCode    string
+	internalErr  error
 }
 
 type httpRouteStateKey struct{}
@@ -63,7 +64,22 @@ func (recorder *httpStatusRecorder) WriteHeader(status int) {
 	recorder.status = status
 	recorder.wroteHeader = true
 	if status >= http.StatusBadRequest && recorder.errorKind == "" {
-		recorder.RecordError(HTTPErrorKind(status), defaultHTTPErrorCode(status))
+		code := defaultHTTPErrorCode(status)
+		recorder.RecordError(HTTPErrorKind(status), code)
+		recorder.suppressBody = true
+		recorder.Header().Set("Content-Type", "application/json; charset=utf-8")
+		recorder.Header().Del("Content-Length")
+		recorder.ResponseWriter.WriteHeader(status)
+		message := code
+		if status >= http.StatusInternalServerError {
+			message = http.StatusText(status)
+		}
+		_ = json.NewEncoder(recorder.ResponseWriter).Encode(struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id"`
+		}{Code: code, Message: message, RequestID: strings.TrimSpace(recorder.Header().Get(RequestIDHeader))})
+		return
 	}
 	recorder.ResponseWriter.WriteHeader(status)
 }
@@ -71,6 +87,9 @@ func (recorder *httpStatusRecorder) WriteHeader(status int) {
 func (recorder *httpStatusRecorder) Write(payload []byte) (int, error) {
 	if !recorder.wroteHeader {
 		recorder.WriteHeader(http.StatusOK)
+	}
+	if recorder.suppressBody {
+		return len(payload), nil
 	}
 	return recorder.ResponseWriter.Write(payload)
 }
@@ -131,7 +150,7 @@ func RecordHTTPStatusError(writer http.ResponseWriter, status int, code string, 
 // hosted modules and independent SaaS processes.
 func HTTPErrorKind(status int) string {
 	switch status {
-	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
+	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
 		return "bad_request"
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "forbidden"
@@ -152,6 +171,8 @@ func defaultHTTPErrorCode(status int) string {
 	switch status {
 	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge:
 		return "http.bad_request"
+	case http.StatusMethodNotAllowed:
+		return "http.method_not_allowed"
 	case http.StatusUnauthorized:
 		return "http.unauthorized"
 	case http.StatusForbidden:

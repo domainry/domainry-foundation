@@ -193,9 +193,21 @@ func TestHTTPServerMiddlewareClassifiesUnannotatedModuleErrors(t *testing.T) {
 	t.Cleanup(func() { zap.ReplaceGlobals(previousLogger) })
 
 	handler := HTTPServerMiddleware(HTTPServerConfig{}, http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
-		writer.WriteHeader(http.StatusForbidden)
+		http.Error(writer, "must not escape", http.StatusForbidden)
 	}))
-	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/module", nil))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/module", nil))
+	var failure struct {
+		Code      string `json:"code"`
+		Message   string `json:"message"`
+		RequestID string `json:"request_id"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+		t.Fatal(err)
+	}
+	if failure.Code != "http.forbidden" || failure.Message != "http.forbidden" || failure.RequestID == "" || strings.Contains(response.Body.String(), "must not escape") {
+		t.Fatalf("failure=%+v body=%q", failure, response.Body.String())
+	}
 	entries := observed.FilterMessage("http_request").All()
 	if len(entries) != 1 {
 		t.Fatalf("entries=%#v", entries)
@@ -203,5 +215,35 @@ func TestHTTPServerMiddlewareClassifiesUnannotatedModuleErrors(t *testing.T) {
 	fields := entries[0].ContextMap()
 	if fields["error_kind"] != "forbidden" || fields["error_code"] != "http.forbidden" {
 		t.Fatalf("fields=%#v", fields)
+	}
+}
+
+func TestHTTPServerMiddlewareCanonicalizesServeMuxRoutingErrors(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /widgets", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusNoContent)
+	})
+	handler := HTTPServerMiddleware(HTTPServerConfig{}, mux)
+	for _, test := range []struct {
+		method, path string
+		status       int
+		code         string
+	}{
+		{http.MethodPost, "/widgets", http.StatusMethodNotAllowed, "http.method_not_allowed"},
+		{http.MethodGet, "/missing", http.StatusNotFound, "http.not_found"},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+		var failure struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"request_id"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&failure); err != nil {
+			t.Fatalf("%s %s: %v body=%q", test.method, test.path, err, response.Body.String())
+		}
+		if response.Code != test.status || failure.Code != test.code || failure.Message != test.code || failure.RequestID == "" {
+			t.Fatalf("%s %s: status=%d failure=%+v", test.method, test.path, response.Code, failure)
+		}
 	}
 }

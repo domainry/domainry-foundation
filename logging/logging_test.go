@@ -3,6 +3,7 @@ package logging
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,6 +109,27 @@ func TestNewRejectsInvalidEnvironmentConfiguration(t *testing.T) {
 	}
 }
 
+func TestReportBootstrapFailureWritesBoundedFallbackWithoutRawError(t *testing.T) {
+	original := os.Stderr
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = writer
+	t.Cleanup(func() { os.Stderr = original })
+	ReportBootstrapFailure("runtime-test", fmt.Errorf("password=private"), Failure{Stage: "logging_initialize"})
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(raw); !strings.Contains(text, `"msg":"process_start_failed"`) || !strings.Contains(text, `"failure_stage":"logging_initialize"`) || strings.Contains(text, "password=private") {
+		t.Fatalf("bootstrap log=%s", text)
+	}
+}
+
 func TestValidateChecksContractWithoutBuildingLogger(t *testing.T) {
 	if err := Validate(Config{ServiceName: "runtime-test", Level: "debug", Encoding: "console"}); err != nil {
 		t.Fatalf("valid contract: %v", err)
@@ -191,6 +213,19 @@ func TestRecordFailureUsesStableEventAndNeverRawErrorText(t *testing.T) {
 		fields := entry.ContextMap()
 		if fields["request_id"] != "req-secondary" || fields["error_code"] != "backend.internal" || strings.Contains(fmt.Sprint(fields), "private") {
 			t.Fatalf("fields=%#v", fields)
+		}
+	}
+}
+
+func TestValidEventNameRejectsDynamicOrHumanMessages(t *testing.T) {
+	for _, event := range []string{"process_started", "runtime_publication_retry_scheduled", "event_2"} {
+		if !ValidEventName(event) {
+			t.Fatalf("expected valid event %q", event)
+		}
+	}
+	for _, event := range []string{"", "Integration ingress committed", "event-name", strings.Repeat("a", 65)} {
+		if ValidEventName(event) {
+			t.Fatalf("expected invalid event %q", event)
 		}
 	}
 }

@@ -190,21 +190,30 @@ func RecordFailure(ctx context.Context, event string, err error, failure Failure
 	FromContext(ctx).Error(event, fields...)
 }
 
-func stableEventName(event string) string {
+// ValidEventName reports whether event is a bounded stable log event key.
+// Dynamic identifiers belong in fields, never in the event name.
+func ValidEventName(event string) bool {
 	event = strings.TrimSpace(event)
 	if event == "" || len(event) > 64 {
-		return "operational_failure"
+		return false
 	}
 	for _, character := range event {
 		if character < 'a' || character > 'z' {
 			if character < '0' || character > '9' {
 				if character != '_' {
-					return "operational_failure"
+					return false
 				}
 			}
 		}
 	}
-	return event
+	return true
+}
+
+func stableEventName(event string) string {
+	if !ValidEventName(event) {
+		return "operational_failure"
+	}
+	return strings.TrimSpace(event)
 }
 
 // Initialize installs the process logger as zap's global logger.
@@ -215,6 +224,21 @@ func Initialize(config Config) (*zap.Logger, error) {
 	}
 	zap.ReplaceGlobals(logger)
 	return logger, nil
+}
+
+// ReportBootstrapFailure is the last-resort startup logger used only when the
+// configured process logger cannot be constructed. It writes one bounded JSON
+// event to stderr without serializing the raw error text.
+func ReportBootstrapFailure(serviceName string, err error, failure Failure) {
+	if err == nil {
+		return
+	}
+	encoderConfig := zap.NewProductionEncoderConfig()
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	core := zapcore.NewCore(zapcore.NewJSONEncoder(encoderConfig), zapcore.Lock(os.Stderr), zapcore.ErrorLevel)
+	logger := zap.New(core).With(zap.String("service", strings.TrimSpace(serviceName)))
+	logger.Error("process_start_failed", ErrorFields(err, failure)...)
+	_ = Sync(logger)
 }
 
 // Sync flushes the process logger once while treating unsupported fsync on

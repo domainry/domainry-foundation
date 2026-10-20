@@ -206,12 +206,7 @@ func observeTick(ctx context.Context, identity Identity, operation string, tick 
 					zap.Int64("duration_ms", duration.Milliseconds()),
 				}
 				fields = append(fields, logging.ErrorFields(err, logging.Failure{Stage: "worker_" + operation, Retryable: retryable})...)
-				logger := logging.FromContext(ctx)
-				if retryable {
-					logger.Warn("worker_"+operation+"_failed", fields...)
-				} else {
-					logger.Error("worker_"+operation+"_failed", fields...)
-				}
+				logTickFailure(ctx, operation, retryable, fields)
 			}
 		}
 		if observed {
@@ -226,6 +221,33 @@ func observeTick(ctx context.Context, identity Identity, operation string, tick 
 		result.Attempt = 0
 	}
 	return result, err
+}
+
+func logTickFailure(ctx context.Context, operation string, retryable bool, fields []zap.Field) {
+	logger := logging.FromContext(ctx)
+	if retryable {
+		switch operation {
+		case "execute":
+			logger.Warn("worker_execute_failed", fields...)
+		case "recovery":
+			logger.Warn("worker_recovery_failed", fields...)
+		case "scan":
+			logger.Warn("worker_scan_failed", fields...)
+		default:
+			logger.Warn("worker_tick_failed", fields...)
+		}
+		return
+	}
+	switch operation {
+	case "execute":
+		logger.Error("worker_execute_failed", fields...)
+	case "recovery":
+		logger.Error("worker_recovery_failed", fields...)
+	case "scan":
+		logger.Error("worker_scan_failed", fields...)
+	default:
+		logger.Error("worker_tick_failed", fields...)
+	}
 }
 
 func classifyTickError(identity Identity, operation string, err error) error {
