@@ -3,6 +3,8 @@ package telemetry
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +24,12 @@ const ExporterDisabled = "none"
 const ExporterOTLPHTTP = "otlp-http"
 const AsyncPayloadKey = "_telemetry"
 
+var w3cPropagator = propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{})
+
+func init() {
+	otel.SetTextMapPropagator(w3cPropagator)
+}
+
 type Config struct {
 	ServiceName    string
 	ServiceVersion string
@@ -35,8 +43,67 @@ type Config struct {
 
 type Shutdown func(context.Context) error
 
+// ConfigFromEnvironment reads the process-level OpenTelemetry contract. Trace
+// propagation remains active when the exporter is disabled.
+func ConfigFromEnvironment(serviceName, serviceVersion string) (Config, error) {
+	exporter := strings.TrimSpace(os.Getenv("OTEL_TRACES_EXPORTER"))
+	if exporter == "" {
+		exporter = strings.TrimSpace(os.Getenv("DOMAINRY_TELEMETRY_EXPORTER"))
+	}
+	if exporter == "" {
+		exporter = strings.TrimSpace(os.Getenv("TELEMETRY_EXPORTER"))
+	}
+	if exporter == "" {
+		exporter = ExporterDisabled
+	}
+	config := Config{
+		ServiceName: strings.TrimSpace(serviceName), ServiceVersion: strings.TrimSpace(serviceVersion), Exporter: exporter,
+		Endpoint: firstEnvironmentValue("TELEMETRY_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"), Headers: parseEnvironmentHeaders(firstEnvironmentValue("TELEMETRY_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")),
+		Insecure: environmentBool("TELEMETRY_INSECURE", "OTEL_EXPORTER_OTLP_INSECURE"), SampleRatio: 1, ExportTimeout: 10 * time.Second,
+	}
+	if raw := firstEnvironmentValue("TELEMETRY_SAMPLE_RATIO", "OTEL_TRACES_SAMPLER_ARG"); raw != "" {
+		ratio, err := strconv.ParseFloat(raw, 64)
+		if err != nil || ratio <= 0 || ratio > 1 {
+			return Config{}, fmt.Errorf("OTEL_TRACES_SAMPLER_ARG must be greater than 0 and at most 1")
+		}
+		config.SampleRatio = ratio
+	}
+	if raw := firstEnvironmentValue("TELEMETRY_EXPORT_TIMEOUT"); raw != "" {
+		duration, durationErr := time.ParseDuration(raw)
+		if durationErr != nil || duration <= 0 {
+			return Config{}, fmt.Errorf("TELEMETRY_EXPORT_TIMEOUT must be a positive duration")
+		}
+		config.ExportTimeout = duration
+	}
+	return config, nil
+}
+
+func firstEnvironmentValue(names ...string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func environmentBool(names ...string) bool {
+	return strings.EqualFold(firstEnvironmentValue(names...), "true")
+}
+
+func parseEnvironmentHeaders(raw string) map[string]string {
+	result := map[string]string{}
+	for _, entry := range strings.Split(raw, ",") {
+		key, value, found := strings.Cut(entry, "=")
+		if key = strings.TrimSpace(key); found && key != "" {
+			result[key] = strings.TrimSpace(value)
+		}
+	}
+	return result
+}
+
 func Initialize(ctx context.Context, cfg Config) (Shutdown, error) {
-	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	otel.SetTextMapPropagator(w3cPropagator)
 	exporterName := strings.ToLower(strings.TrimSpace(cfg.Exporter))
 	if exporterName == "" || exporterName == "off" || exporterName == ExporterDisabled {
 		return func(context.Context) error { return nil }, nil
@@ -95,15 +162,19 @@ func cloneHeaders(source map[string]string) map[string]string {
 }
 
 type AsyncLink struct {
-	TraceID       string
-	SpanID        string
-	TraceFlags    byte
-	CorrelationID string
+	TraceID          string
+	SpanID           string
+	TraceFlags       byte
+	CorrelationID    string
+	OwnerExecutionID string
 }
 
 func CaptureAsyncLink(ctx context.Context, correlationID string) map[string]any {
 	spanContext := trace.SpanContextFromContext(ctx)
-	result := map[string]any{"correlation_id": strings.TrimSpace(correlationID)}
+	result := map[string]any{
+		"correlation_id":     normalizedCorrelationValue(correlationID),
+		"owner_execution_id": strings.TrimSpace(requestcontext.OwnerExecutionID(ctx)),
+	}
 	if spanContext.IsValid() {
 		result["trace_id"] = spanContext.TraceID().String()
 		result["span_id"] = spanContext.SpanID().String()
@@ -116,8 +187,15 @@ func EnsureAsyncPayload(ctx context.Context, payload map[string]any) map[string]
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	if _, exists := payload[AsyncPayloadKey]; exists {
-		return payload
+	if persisted, exists := payload[AsyncPayloadKey]; exists {
+		values, validShape := persisted.(map[string]any)
+		if validShape {
+			link := ParseAsyncLink(values)
+			if link.CorrelationID != "" || (link.TraceID != "" && link.SpanID != "") {
+				return payload
+			}
+		}
+		delete(payload, AsyncPayloadKey)
 	}
 	correlationID := requestcontext.CorrelationID(ctx)
 	if correlationID == "" {
@@ -141,11 +219,31 @@ func ApplicationPayload(payload map[string]any) map[string]any {
 	return result
 }
 
-func ParseAsyncLink(values map[string]any) AsyncLink {
-	return AsyncLink{
-		TraceID: asyncString(values["trace_id"]), SpanID: asyncString(values["span_id"]),
-		TraceFlags: asyncTraceFlags(values["trace_flags"]), CorrelationID: asyncString(values["correlation_id"]),
+// ConsumeAsyncPayload separates framework-owned trace linkage from the
+// application payload. Workers call it after a durable claim and must pass only
+// the returned application payload to business code, audit or providers.
+func ConsumeAsyncPayload(payload map[string]any) (map[string]any, AsyncLink) {
+	var link AsyncLink
+	if values, ok := payload[AsyncPayloadKey].(map[string]any); ok {
+		link = ParseAsyncLink(values)
 	}
+	return ApplicationPayload(payload), link
+}
+
+func ParseAsyncLink(values map[string]any) AsyncLink {
+	link := AsyncLink{
+		TraceID: asyncString(values["trace_id"]), SpanID: asyncString(values["span_id"]),
+		TraceFlags: asyncTraceFlags(values["trace_flags"]), CorrelationID: normalizedCorrelationValue(asyncString(values["correlation_id"])),
+		OwnerExecutionID: asyncString(values["owner_execution_id"]),
+	}
+	traceID, traceErr := trace.TraceIDFromHex(link.TraceID)
+	spanID, spanErr := trace.SpanIDFromHex(link.SpanID)
+	if traceErr != nil || spanErr != nil || !traceID.IsValid() || !spanID.IsValid() {
+		link.TraceID = ""
+		link.SpanID = ""
+		link.TraceFlags = 0
+	}
+	return link
 }
 
 func asyncString(value any) string {
@@ -156,6 +254,11 @@ func asyncString(value any) string {
 }
 
 func StartLinkedSpan(ctx context.Context, tracerName, spanName string, link AsyncLink, options ...trace.SpanStartOption) (context.Context, trace.Span) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = requestcontext.WithCorrelationID(ctx, link.CorrelationID)
+	ctx = requestcontext.WithOwnerExecutionID(ctx, link.OwnerExecutionID)
 	if traceID, err := trace.TraceIDFromHex(link.TraceID); err == nil {
 		if spanID, spanErr := trace.SpanIDFromHex(link.SpanID); spanErr == nil {
 			spanContext := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.TraceFlags(link.TraceFlags), Remote: true})

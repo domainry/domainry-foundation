@@ -61,6 +61,7 @@ func TestUseCaseToPersistedAsyncWorkerTraceChain(t *testing.T) {
 	t.Cleanup(func() { _ = provider.Shutdown(t.Context()); otel.SetTracerProvider(previous) })
 
 	requestContext := requestcontext.WithCorrelationID(t.Context(), "correlation-42")
+	requestContext = requestcontext.WithOwnerExecutionID(requestContext, "execution-42")
 	requestContext, requestSpan := provider.Tracer("test.http").Start(requestContext, "POST /actions/{actionKey}")
 	applicationContext, useCaseSpan := StartUseCase(requestContext, "action.invoke")
 	payload := EnsureAsyncPayload(applicationContext, map[string]any{"record_id": "record-7"})
@@ -72,7 +73,7 @@ func TestUseCaseToPersistedAsyncWorkerTraceChain(t *testing.T) {
 		t.Fatalf("persisted telemetry link missing: %#v", payload)
 	}
 	link := ParseAsyncLink(persisted)
-	_, workerSpan := StartLinkedSpan(context.Background(), "test.worker", "integration.outbox.send", link)
+	workerContext, workerSpan := StartLinkedSpan(context.Background(), "test.worker", "integration.outbox.send", link)
 	workerSpan.End()
 
 	ended := recorder.Ended()
@@ -104,6 +105,9 @@ func TestUseCaseToPersistedAsyncWorkerTraceChain(t *testing.T) {
 	}
 	if link.CorrelationID != "correlation-42" {
 		t.Fatalf("correlation id=%q", link.CorrelationID)
+	}
+	if requestcontext.CorrelationID(workerContext) != "correlation-42" || requestcontext.OwnerExecutionID(workerContext) != "execution-42" {
+		t.Fatalf("worker context correlation=%q execution=%q", requestcontext.CorrelationID(workerContext), requestcontext.OwnerExecutionID(workerContext))
 	}
 }
 
@@ -140,6 +144,30 @@ func TestEnsureAsyncPayloadUsesCorrelationAndDoesNotOverwritePersistedLink(t *te
 	application := ApplicationPayload(map[string]any{"request_id": "req", AsyncPayloadKey: link, "order_id": "one"})
 	if len(application) != 1 || application["order_id"] != "one" {
 		t.Fatalf("application payload=%#v", application)
+	}
+	invalid := EnsureAsyncPayload(t.Context(), map[string]any{AsyncPayloadKey: map[string]any{"trace_id": "invalid", "span_id": "invalid"}})
+	if _, exists := invalid[AsyncPayloadKey]; exists {
+		t.Fatalf("invalid persisted telemetry survived validation: %#v", invalid)
+	}
+}
+
+func TestConsumeAsyncPayloadSeparatesFrameworkMetadata(t *testing.T) {
+	payload := map[string]any{
+		"customer": "safe",
+		AsyncPayloadKey: map[string]any{
+			"trace_id":           "4bf92f3577b34da6a3ce929d0e0e4736",
+			"span_id":            "00f067aa0ba902b7",
+			"trace_flags":        byte(1),
+			"correlation_id":     "corr-1",
+			"owner_execution_id": "execution-1",
+		},
+	}
+	applicationPayload, link := ConsumeAsyncPayload(payload)
+	if applicationPayload["customer"] != "safe" || applicationPayload[AsyncPayloadKey] != nil || link.CorrelationID != "corr-1" || link.OwnerExecutionID != "execution-1" || link.TraceID == "" || link.SpanID == "" {
+		t.Fatalf("application payload=%#v link=%+v", applicationPayload, link)
+	}
+	if _, stillPersisted := payload[AsyncPayloadKey]; !stillPersisted {
+		t.Fatal("consume mutated durable payload")
 	}
 }
 

@@ -10,7 +10,10 @@ func TestStartWorkerLoopDoesNotTickCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	called := make(chan struct{}, 1)
-	StartLoop(ctx, time.Millisecond, func() { called <- struct{}{} })
+	StartNamedLoop(ctx, Identity{Owner: "test", Name: "cancelled"}, time.Millisecond, func(context.Context) (TickResult, error) {
+		called <- struct{}{}
+		return TickResult{}, nil
+	})
 	select {
 	case <-called:
 		t.Fatal("cancelled worker executed a repository tick")
@@ -21,7 +24,10 @@ func TestStartWorkerLoopDoesNotTickCancelledContext(t *testing.T) {
 func TestStartWorkerLoopStopsSchedulingAfterCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	called := make(chan struct{}, 2)
-	StartLoop(ctx, time.Hour, func() { called <- struct{}{} })
+	StartNamedLoop(ctx, Identity{Owner: "test", Name: "cancel"}, time.Hour, func(context.Context) (TickResult, error) {
+		called <- struct{}{}
+		return TickResult{}, nil
+	})
 	select {
 	case <-called:
 	case <-time.After(time.Second):
@@ -39,9 +45,10 @@ func TestStartWorkerLoopDoneWaitsForActiveTick(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	started := make(chan struct{})
 	release := make(chan struct{})
-	done := StartLoop(ctx, time.Hour, func() {
+	done := StartNamedLoop(ctx, Identity{Owner: "test", Name: "active"}, time.Hour, func(context.Context) (TickResult, error) {
 		close(started)
 		<-release
+		return TickResult{}, nil
 	})
 	select {
 	case <-started:
@@ -67,13 +74,14 @@ func TestStartNamedLoopRecoversPanicAndContinues(t *testing.T) {
 	defer cancel()
 	continued := make(chan struct{})
 	ticks := 0
-	done := StartNamedLoop(ctx, "panic-test", time.Millisecond, func() {
+	done := StartNamedLoop(ctx, Identity{Owner: "test", Name: "panic-test"}, time.Millisecond, func(context.Context) (TickResult, error) {
 		ticks++
 		if ticks == 1 {
 			panic("broken tick")
 		}
 		close(continued)
 		cancel()
+		return TickResult{}, nil
 	})
 	select {
 	case <-continued:
@@ -89,7 +97,7 @@ func TestStartNamedLoopRecoversPanicAndContinues(t *testing.T) {
 
 func TestStartNamedLoopHandlesNilTickAndInvalidInterval(t *testing.T) {
 	select {
-	case <-StartNamedLoop(t.Context(), "nil", 0, nil):
+	case <-StartNamedLoop(t.Context(), Identity{Owner: "test", Name: "nil"}, 0, nil):
 	case <-time.After(time.Second):
 		t.Fatal("nil worker tick did not stop")
 	}
@@ -100,10 +108,12 @@ func TestStartWakeableRecoveryLoopRunsWakeupsAndRecoversLostSignals(t *testing.T
 	defer cancel()
 	wakeups := make(chan string, 1)
 	recovered, executed := make(chan struct{}, 4), make(chan string, 1)
-	done := StartWakeableRecoveryLoop(ctx, "agent_task", 10*time.Millisecond, wakeups, func() {
+	done := StartWakeableRecoveryLoop(ctx, Identity{Owner: "agent", Name: "agent_task"}, 10*time.Millisecond, wakeups, func(context.Context) (TickResult, error) {
 		recovered <- struct{}{}
-	}, func(value string) {
+		return TickResult{}, nil
+	}, func(_ context.Context, value string) (TickResult, error) {
 		executed <- value
+		return TickResult{Worked: true, ProcessedCount: 1}, nil
 	})
 	wakeups <- "workspace/run"
 	select {
@@ -151,9 +161,9 @@ func TestWakeableAdaptiveLoopInterruptsIdleBackoff(t *testing.T) {
 	defer cancel()
 	wakeups := make(chan string, 1)
 	ticks := make(chan time.Time, 2)
-	done := StartWakeableAdaptiveLoop(ctx, "record_batch", time.Hour, time.Hour, wakeups, func() bool {
+	done := StartWakeableAdaptiveLoop(ctx, Identity{Owner: "runtime", Name: "record_batch"}, time.Hour, time.Hour, wakeups, func(context.Context) (TickResult, error) {
 		ticks <- time.Now()
-		return false
+		return TickResult{}, nil
 	})
 	select {
 	case <-ticks:

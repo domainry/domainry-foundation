@@ -103,7 +103,7 @@ func (m *OperationalMetrics) end(owner, outcome string, duration time.Duration) 
 	if owner == "" {
 		return
 	}
-	if outcome != "panic" {
+	if outcome != "panic" && outcome != "error" {
 		outcome = "success"
 	}
 	key := owner + "\x00" + outcome

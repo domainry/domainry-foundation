@@ -184,12 +184,15 @@ func TestFaultAndHeartbeatRemainingEdges(t *testing.T) {
 
 func TestLifecycleRemainingGuardAndMetricEdges(t *testing.T) {
 	select {
-	case <-StartNamedLoop(nil, "worker", time.Second, func() {}):
+	case <-StartNamedLoop(nil, Identity{Owner: "test", Name: "worker"}, time.Second, func(context.Context) (TickResult, error) { return TickResult{}, nil }):
 	case <-time.After(time.Second):
 		t.Fatal("nil context loop did not stop")
 	}
 	ctx, cancel := context.WithCancel(t.Context())
-	done := StartNamedLoop(ctx, " ", 0, cancel)
+	done := StartNamedLoop(ctx, Identity{}, 0, func(context.Context) (TickResult, error) {
+		cancel()
+		return TickResult{}, nil
+	})
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -203,7 +206,10 @@ func TestLifecycleRemainingGuardAndMetricEdges(t *testing.T) {
 	closed := make(chan struct{})
 	close(closed)
 	select {
-	case <-StartNamedLoop(workerContextStub{done: closed}, "closed", time.Millisecond, func() { t.Fatal("closed context ticked") }):
+	case <-StartNamedLoop(workerContextStub{done: closed}, Identity{Owner: "test", Name: "closed"}, time.Millisecond, func(context.Context) (TickResult, error) {
+		t.Fatal("closed context ticked")
+		return TickResult{}, nil
+	}):
 	case <-time.After(time.Second):
 		t.Fatal("closed custom context loop did not stop")
 	}
@@ -214,7 +220,10 @@ func TestLifecycleRemainingGuardAndMetricEdges(t *testing.T) {
 			return context.Canceled
 		}
 		return nil
-	}}, "ticker-cancel", time.Millisecond, func() { cancelled = true })
+	}}, Identity{Owner: "test", Name: "ticker-cancel"}, time.Millisecond, func(context.Context) (TickResult, error) {
+		cancelled = true
+		return TickResult{}, nil
+	})
 	select {
 	case <-done:
 	case <-time.After(time.Second):
@@ -227,7 +236,7 @@ func TestLifecycleRemainingGuardAndMetricEdges(t *testing.T) {
 		t.Fatal("failed to occupy metric owner")
 	}
 	defaultOperationalMetrics = metrics
-	runTick(t.Context(), "dropped", func() {})
+	_, _ = observeTick(t.Context(), Identity{Owner: "dropped", Name: "dropped"}, "tick", func(context.Context) (TickResult, error) { return TickResult{}, nil })
 	defaultOperationalMetrics = previousMetrics
 }
 
@@ -265,9 +274,10 @@ func TestOperationalMetricsRemainingEdges(t *testing.T) {
 		t.Fatal("owner not observed")
 	}
 	metrics.end(owner, "panic", 100*time.Second)
+	metrics.end(owner, "error", time.Second)
 	metrics.end(owner, "success", time.Millisecond)
 	output := metrics.openMetrics()
-	for _, expected := range []string{`owner="owner",outcome="panic"`, `owner="owner",outcome="success"`} {
+	for _, expected := range []string{`owner="owner",outcome="panic"`, `owner="owner",outcome="error"`, `owner="owner",outcome="success"`} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("metrics missing %q", expected)
 		}

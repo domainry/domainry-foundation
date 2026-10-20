@@ -16,7 +16,10 @@ import (
 func TestNewReadsEnvironmentConfiguration(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_ENCODING", "console")
-	logger, err := New("runtime-test")
+	t.Setenv("APP_ENV", "test")
+	t.Setenv("DOMAINRY_DEPLOYMENT_ID", "deployment-test")
+	t.Setenv("DOMAINRY_INSTANCE_ID", "instance-test")
+	logger, err := New(ConfigFromEnvironment("runtime-test", "v1"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -24,42 +27,84 @@ func TestNewReadsEnvironmentConfiguration(t *testing.T) {
 	if !logger.Core().Enabled(zapcore.DebugLevel) {
 		t.Fatal("debug logging was not enabled")
 	}
+	config := ConfigFromEnvironment("runtime-test", "v1")
+	if config.Environment != "test" || config.DeploymentID != "deployment-test" || config.InstanceID != "instance-test" {
+		t.Fatalf("environment config=%+v", config)
+	}
+	built, err := zapConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if built.InitialFields["service"] != "runtime-test" || built.InitialFields["version"] != "v1" || built.InitialFields["environment"] != "test" || built.InitialFields["deployment_id"] != "deployment-test" || built.InitialFields["instance_id"] != "instance-test" {
+		t.Fatalf("process fields=%v", built.InitialFields)
+	}
+	if built.Sampling == nil || built.Sampling.Initial != defaultSamplingInitial || built.Sampling.Thereafter != defaultSamplingThereafter {
+		t.Fatalf("sampling=%+v", built.Sampling)
+	}
 }
 
 func TestLoggingDefaultsInitializationAndNilErrorFields(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "")
 	t.Setenv("LOG_ENCODING", "")
-	logger, err := New(" ")
+	logger, err := New(Config{ServiceName: "runtime-test"})
 	if err != nil || !logger.Core().Enabled(zapcore.InfoLevel) {
 		t.Fatalf("default logger=%v error=%v", logger, err)
 	}
 	_ = logger.Sync()
-	if fields := StableErrorFields(nil); fields != nil {
+	if fields := ErrorFields(nil, Failure{}); fields != nil {
 		t.Fatalf("nil error fields = %#v", fields)
+	}
+	if _, err := New(Config{}); err == nil {
+		t.Fatal("blank service name was accepted")
 	}
 
 	previous := zap.L()
-	initialized, err := Initialize(" runtime ")
+	initialized, err := Initialize(Config{ServiceName: " runtime "})
 	if err != nil || zap.L() != initialized {
 		t.Fatalf("initialized logger=%v error=%v", initialized, err)
 	}
 	zap.ReplaceGlobals(previous)
 
 	t.Setenv("LOG_LEVEL", "invalid")
-	if _, err := Initialize("runtime"); err == nil {
+	if _, err := Initialize(ConfigFromEnvironment("runtime", "development")); err == nil {
 		t.Fatal("invalid global logger configuration accepted")
 	}
 }
 
 func TestNewRejectsInvalidEnvironmentConfiguration(t *testing.T) {
 	t.Setenv("LOG_LEVEL", "verbose")
-	if _, err := New("runtime-test"); err == nil {
+	if _, err := New(ConfigFromEnvironment("runtime-test", "development")); err == nil {
 		t.Fatal("invalid log level was accepted")
 	}
 	t.Setenv("LOG_LEVEL", "info")
 	t.Setenv("LOG_ENCODING", "xml")
-	if _, err := New("runtime-test"); err == nil {
+	if _, err := New(ConfigFromEnvironment("runtime-test", "development")); err == nil {
 		t.Fatal("invalid log encoding was accepted")
+	}
+}
+
+func TestValidateChecksContractWithoutBuildingLogger(t *testing.T) {
+	if err := Validate(Config{ServiceName: "runtime-test", Level: "debug", Encoding: "console"}); err != nil {
+		t.Fatalf("valid contract: %v", err)
+	}
+	for _, config := range []Config{
+		{ServiceName: "", Level: "info", Encoding: "json"},
+		{ServiceName: "runtime-test", Level: "verbose", Encoding: "json"},
+		{ServiceName: "runtime-test", Level: "info", Encoding: "xml"},
+	} {
+		if err := Validate(config); err == nil {
+			t.Fatalf("invalid contract accepted: %+v", config)
+		}
+	}
+}
+
+func TestNewSupportsProcessOwnedOutputSelection(t *testing.T) {
+	config, err := zapConfig(Config{ServiceName: "evaluation-cli", OutputPaths: []string{" stderr ", ""}, ErrorOutputPaths: []string{" stderr "}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.OutputPaths) != 1 || config.OutputPaths[0] != "stderr" || len(config.ErrorOutputPaths) != 1 || config.ErrorOutputPaths[0] != "stderr" {
+		t.Fatalf("output paths=%v error paths=%v", config.OutputPaths, config.ErrorOutputPaths)
 	}
 }
 
@@ -100,18 +145,24 @@ func TestSensitiveTokenFieldVariants(t *testing.T) {
 }
 
 func TestFieldsRedactSensitiveKeysRecursively(t *testing.T) {
+	type unsafeDetails struct {
+		Password string
+	}
 	fields := Fields(map[string]any{
 		"authorization": "Bearer secret", "payload": map[string]any{"name": "hidden"},
-		"details": map[string]any{"status": "failed", "password": "hidden", "nested": []any{map[string]any{"token": "hidden", "code": "stable"}}},
+		"error": "sql=SELECT secret", "raw_error": "hidden", "panic": "credential",
+		"details":    map[string]any{"status": "failed", "password": "hidden", "nested": []any{map[string]any{"token": "hidden", "code": "stable"}}},
+		"string_map": map[string]string{"credential": "hidden", "result": "bounded"},
+		"struct":     unsafeDetails{Password: "hidden"}, "binary": []byte("hidden"),
 	})
-	if len(fields) != 1 || fields[0].Key != "details" {
+	if len(fields) != 4 || fields[0].Key != "binary" || fields[1].Key != "details" || fields[2].Key != "string_map" || fields[3].Key != "struct" {
 		t.Fatalf("fields=%#v", fields)
 	}
 	core, observed := observer.New(zapcore.InfoLevel)
 	zap.New(core).Info("redaction", fields...)
 	encoded := observed.All()[0].ContextMap()
 	text := fmt.Sprint(encoded)
-	if strings.Contains(text, "hidden") || strings.Contains(strings.ToLower(text), "password") || !strings.Contains(text, "stable") {
+	if strings.Contains(text, "hidden") || strings.Contains(strings.ToLower(text), "password") || !strings.Contains(text, "stable") || !strings.Contains(text, "bounded") {
 		t.Fatalf("redacted fields=%s", text)
 	}
 }
@@ -153,12 +204,36 @@ func TestLogIdempotencyDefaultsRequestIDFromContext(t *testing.T) {
 	}
 }
 
-func TestStableErrorFieldsExcludeRawErrorText(t *testing.T) {
-	fields := StableErrorFields(fmt.Errorf("password=secret sql=SELECT * FROM users"))
+func TestErrorFieldsExcludeRawErrorTextAndIncludeStableFailureContext(t *testing.T) {
+	fields := ErrorFields(fmt.Errorf("password=secret sql=SELECT * FROM users"), Failure{Stage: "database_query", Dependency: "primary_database", Retryable: true})
 	core, observed := observer.New(zapcore.ErrorLevel)
 	zap.New(core).Error("failed", fields...)
-	text := fmt.Sprint(observed.All()[0].ContextMap())
+	values := observed.All()[0].ContextMap()
+	text := fmt.Sprint(values)
 	if strings.Contains(text, "secret") || strings.Contains(text, "SELECT") || !strings.Contains(text, "backend.internal") {
 		t.Fatalf("unstable error fields=%s", text)
+	}
+	if values["failure_stage"] != "database_query" || values["dependency"] != "primary_database" || values["retryable"] != true {
+		t.Fatalf("failure fields=%v", values)
+	}
+}
+
+func TestProcessLifecycleUsesCanonicalEvents(t *testing.T) {
+	core, observed := observer.New(zapcore.InfoLevel)
+	previous := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	defer zap.ReplaceGlobals(previous)
+
+	ProcessStarted(t.Context(), map[string]any{"module_count": 3})
+	ProcessStopping(t.Context(), nil)
+	ProcessStopped(t.Context(), nil)
+	ProcessStartFailed(t.Context(), fmt.Errorf("secret startup detail"), Failure{Stage: "module_assembly"})
+
+	entries := observed.All()
+	if len(entries) != 4 || entries[0].Message != "process_started" || entries[1].Message != "process_stopping" || entries[2].Message != "process_stopped" || entries[3].Message != "process_start_failed" {
+		t.Fatalf("process events=%#v", entries)
+	}
+	if entries[0].ContextMap()["module_count"] != int64(3) || entries[3].ContextMap()["failure_stage"] != "module_assembly" {
+		t.Fatalf("process fields=%#v", entries)
 	}
 }

@@ -12,7 +12,7 @@ func TestDispatcherWithExecutorsBoundsScanAndExecutionCapacity(t *testing.T) {
 	defer cancel()
 	var inFlight, maximum, processed atomic.Int32
 	release := make(chan struct{})
-	done := StartDispatcherWithExecutors(ctx, DispatcherExecutorConfig{Concurrency: 3, MinInterval: time.Millisecond, MaxInterval: 5 * time.Millisecond},
+	done := StartDispatcherWithExecutors(ctx, DispatcherExecutorConfig{Owner: "test", Name: "bounded", Concurrency: 3, MinInterval: time.Millisecond, MaxInterval: 5 * time.Millisecond},
 		func(_ context.Context, available int) ([]int, error) {
 			if available > 3 {
 				t.Fatalf("available=%d exceeds capacity", available)
@@ -20,13 +20,14 @@ func TestDispatcherWithExecutorsBoundsScanAndExecutionCapacity(t *testing.T) {
 			items := make([]int, available)
 			return items, nil
 		},
-		func(context.Context, int) {
+		func(context.Context, int) (TickResult, error) {
 			current := inFlight.Add(1)
 			for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
 			}
 			<-release
 			inFlight.Add(-1)
 			processed.Add(1)
+			return TickResult{Worked: true, ProcessedCount: 1}, nil
 		},
 	)
 	deadline := time.Now().Add(time.Second)
@@ -54,14 +55,17 @@ func TestWakeableDispatcherExecutesLocatorsAndRecoversLostWakeups(t *testing.T) 
 	wakeups := make(chan int, 1)
 	executed := make(chan int, 4)
 	var recoveries atomic.Int32
-	done := StartWakeableDispatcherWithExecutors(ctx, DispatcherExecutorConfig{Name: "outbox", Concurrency: 2}, 10*time.Millisecond, wakeups,
+	done := StartWakeableDispatcherWithExecutors(ctx, DispatcherExecutorConfig{Owner: "test", Name: "outbox", Concurrency: 2}, 10*time.Millisecond, wakeups,
 		func(context.Context, int) ([]int, error) {
 			if recoveries.Add(1) == 2 {
 				return []int{2}, nil
 			}
 			return nil, nil
 		},
-		func(_ context.Context, value int) { executed <- value },
+		func(_ context.Context, value int) (TickResult, error) {
+			executed <- value
+			return TickResult{Worked: true, ProcessedCount: 1}, nil
+		},
 	)
 	wakeups <- 1
 	seen := map[int]bool{}

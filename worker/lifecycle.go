@@ -2,32 +2,41 @@ package worker
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/domainry/domainry-foundation/apperror"
 	"github.com/domainry/domainry-foundation/logging"
 	"go.uber.org/zap"
 )
 
-func StartLoop(ctx context.Context, interval time.Duration, tick func()) <-chan struct{} {
-	return StartNamedLoop(ctx, "worker", interval, tick)
+// Identity is the bounded process-owned identity of one worker loop.
+type Identity struct {
+	Owner string
+	Name  string
 }
 
-// StartNamedLoop runs a recurring task until cancellation. A panic in one tick
-// is isolated to that tick, recorded with its worker identity and stack, and
-// does not terminate either the loop or its hosting process.
-func StartNamedLoop(ctx context.Context, name string, interval time.Duration, tick func()) <-chan struct{} {
+// TickResult is the non-payload operational result consumed by the worker
+// supervisor. Business results remain in the owner's durable store.
+type TickResult struct {
+	Worked         bool
+	ProcessedCount int
+	Attempt        int
+}
+
+type Tick func(context.Context) (TickResult, error)
+
+func StartNamedLoop(ctx context.Context, identity Identity, interval time.Duration, tick Tick) <-chan struct{} {
 	done := make(chan struct{})
 	if ctx == nil || ctx.Err() != nil || tick == nil {
 		close(done)
 		return done
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "worker"
-	}
+	identity = normalizedIdentity(identity)
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -37,7 +46,7 @@ func StartNamedLoop(ctx context.Context, name string, interval time.Duration, ti
 		case <-ctx.Done():
 			return
 		default:
-			runTick(ctx, name, tick)
+			_, _ = observeTick(ctx, identity, "tick", tick)
 		}
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -49,7 +58,7 @@ func StartNamedLoop(ctx context.Context, name string, interval time.Duration, ti
 				if ctx.Err() != nil {
 					return
 				}
-				runTick(ctx, name, tick)
+				_, _ = observeTick(ctx, identity, "tick", tick)
 			}
 		}
 	}()
@@ -58,18 +67,18 @@ func StartNamedLoop(ctx context.Context, name string, interval time.Duration, ti
 
 // StartAdaptiveLoop polls quickly while work is available and backs off while
 // idle. Durable queue ownership and retries remain the tick's responsibility.
-func StartAdaptiveLoop(ctx context.Context, name string, minInterval, maxInterval time.Duration, tick func() bool) <-chan struct{} {
-	return startWakeableAdaptiveLoop[struct{}](ctx, name, minInterval, maxInterval, nil, tick)
+func StartAdaptiveLoop(ctx context.Context, identity Identity, minInterval, maxInterval time.Duration, tick Tick) <-chan struct{} {
+	return startWakeableAdaptiveLoop[struct{}](ctx, identity, minInterval, maxInterval, nil, tick)
 }
 
 // StartWakeableAdaptiveLoop preserves adaptive durable recovery while allowing
 // committed local work to interrupt the idle backoff. Wakeups are lossy hints;
 // tick must still claim durable work from its owner store.
-func StartWakeableAdaptiveLoop[T any](ctx context.Context, name string, minInterval, maxInterval time.Duration, wakeups <-chan T, tick func() bool) <-chan struct{} {
-	return startWakeableAdaptiveLoop(ctx, name, minInterval, maxInterval, wakeups, tick)
+func StartWakeableAdaptiveLoop[T any](ctx context.Context, identity Identity, minInterval, maxInterval time.Duration, wakeups <-chan T, tick Tick) <-chan struct{} {
+	return startWakeableAdaptiveLoop(ctx, identity, minInterval, maxInterval, wakeups, tick)
 }
 
-func startWakeableAdaptiveLoop[T any](ctx context.Context, name string, minInterval, maxInterval time.Duration, wakeups <-chan T, tick func() bool) <-chan struct{} {
+func startWakeableAdaptiveLoop[T any](ctx context.Context, identity Identity, minInterval, maxInterval time.Duration, wakeups <-chan T, tick Tick) <-chan struct{} {
 	done := make(chan struct{})
 	if ctx == nil || ctx.Err() != nil || tick == nil {
 		close(done)
@@ -81,20 +90,16 @@ func startWakeableAdaptiveLoop[T any](ctx context.Context, name string, minInter
 	if maxInterval < minInterval {
 		maxInterval = minInterval
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "worker"
-	}
+	identity = normalizedIdentity(identity)
 	go func() {
 		defer close(done)
 		interval := minInterval
 		for {
-			worked := false
-			runTick(ctx, name, func() { worked = tick() })
+			result, _ := observeTick(ctx, identity, "tick", tick)
 			if ctx.Err() != nil {
 				return
 			}
-			interval = nextAdaptiveInterval(interval, minInterval, maxInterval, worked)
+			interval = nextAdaptiveInterval(interval, minInterval, maxInterval, result.Worked)
 			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():
@@ -132,9 +137,8 @@ func nextAdaptiveInterval(current, minInterval, maxInterval time.Duration, worke
 
 // StartWakeableRecoveryLoop executes committed task locators immediately while
 // retaining one periodic durable recovery pass for lost wakeups, retries,
-// expired leases and process restarts. Wakeups are hints; ownership stays with
-// the task owner's database claim.
-func StartWakeableRecoveryLoop[T any](ctx context.Context, name string, recoveryInterval time.Duration, wakeups <-chan T, recover func(), execute func(T)) <-chan struct{} {
+// expired leases and process restarts.
+func StartWakeableRecoveryLoop[T any](ctx context.Context, identity Identity, recoveryInterval time.Duration, wakeups <-chan T, recover Tick, execute func(context.Context, T) (TickResult, error)) <-chan struct{} {
 	done := make(chan struct{})
 	if ctx == nil || ctx.Err() != nil || recover == nil || execute == nil {
 		close(done)
@@ -143,13 +147,10 @@ func StartWakeableRecoveryLoop[T any](ctx context.Context, name string, recovery
 	if recoveryInterval <= 0 {
 		recoveryInterval = 30 * time.Second
 	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "worker"
-	}
+	identity = normalizedIdentity(identity)
 	go func() {
 		defer close(done)
-		runTick(ctx, name, recover)
+		_, _ = observeTick(ctx, identity, "recovery", recover)
 		timer := time.NewTimer(recoveryInterval)
 		defer timer.Stop()
 		for {
@@ -161,9 +162,11 @@ func StartWakeableRecoveryLoop[T any](ctx context.Context, name string, recovery
 					wakeups = nil
 					continue
 				}
-				runTick(ctx, name, func() { execute(value) })
+				_, _ = observeTick(ctx, identity, "execute", func(executeCtx context.Context) (TickResult, error) {
+					return execute(executeCtx, value)
+				})
 			case <-timer.C:
-				runTick(ctx, name, recover)
+				_, _ = observeTick(ctx, identity, "recovery", recover)
 				timer.Reset(recoveryInterval)
 			}
 		}
@@ -171,24 +174,76 @@ func StartWakeableRecoveryLoop[T any](ctx context.Context, name string, recovery
 	return done
 }
 
-func runTick(ctx context.Context, name string, tick func()) {
+func observeTick(ctx context.Context, identity Identity, operation string, tick Tick) (result TickResult, err error) {
 	started := time.Now()
-	owner, observed := defaultOperationalMetrics.begin(name)
+	metricOwner, observed := defaultOperationalMetrics.begin(identity.Owner)
 	outcome := "success"
 	defer func() {
+		duration := time.Since(started)
 		if recovered := recover(); recovered != nil {
 			outcome = "panic"
-			logging.FromContext(ctx).Error("worker tick panicked",
-				zap.String("worker", name),
-				zap.Any("panic", recovered),
+			err = apperror.New(apperror.KindInternal, "worker.panic", nil, nil)
+			logging.FromContext(ctx).Error("panic_recovered",
+				zap.String("component", "worker"),
+				zap.String("owner", identity.Owner),
+				zap.String("worker", identity.Name),
+				zap.String("operation", operation),
+				zap.String("panic_type", fmt.Sprintf("%T", recovered)),
 				zap.ByteString("stack", debug.Stack()),
+				zap.Int64("duration_ms", duration.Milliseconds()),
 			)
+		} else if err != nil {
+			outcome = "error"
+			if !cancelledByProcess(ctx, err) {
+				retryable := ClassifyApplicationError(err).Retryable()
+				fields := []zap.Field{
+					zap.String("owner", identity.Owner),
+					zap.String("worker", identity.Name),
+					zap.String("operation", operation),
+					zap.Int("attempt", max(result.Attempt, 0)),
+					zap.Int("processed_count", max(result.ProcessedCount, 0)),
+					zap.Int64("duration_ms", duration.Milliseconds()),
+				}
+				fields = append(fields, logging.ErrorFields(err, logging.Failure{Stage: "worker_" + operation, Retryable: retryable})...)
+				logger := logging.FromContext(ctx)
+				if retryable {
+					logger.Warn("worker_"+operation+"_failed", fields...)
+				} else {
+					logger.Error("worker_"+operation+"_failed", fields...)
+				}
+			}
 		}
 		if observed {
-			defaultOperationalMetrics.end(owner, outcome, time.Since(started))
+			defaultOperationalMetrics.end(metricOwner, outcome, duration)
 		}
 	}()
-	tick()
+	result, err = tick(ctx)
+	if result.ProcessedCount < 0 {
+		result.ProcessedCount = 0
+	}
+	if result.Attempt < 0 {
+		result.Attempt = 0
+	}
+	return result, err
+}
+
+func cancelledByProcess(ctx context.Context, err error) bool {
+	if ctx == nil || ctx.Err() == nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded)
+}
+
+func normalizedIdentity(identity Identity) Identity {
+	identity.Owner = boundedWorkerOwner(identity.Owner)
+	identity.Name = strings.ToLower(strings.TrimSpace(identity.Name))
+	if identity.Name == "" {
+		identity.Name = "worker"
+	}
+	if identity.Owner == "unknown" {
+		identity.Owner = boundedWorkerOwner(identity.Name)
+	}
+	return identity
 }
 
 func Stopped() <-chan struct{} {
@@ -215,16 +270,21 @@ func Join(doneChannels ...<-chan struct{}) <-chan struct{} {
 }
 
 type DispatcherExecutorConfig struct {
+	Owner       string
 	Name        string
 	Concurrency int
 	MinInterval time.Duration
 	MaxInterval time.Duration
 }
 
+func (config DispatcherExecutorConfig) identity() Identity {
+	return normalizedIdentity(Identity{Owner: config.Owner, Name: config.Name})
+}
+
 // StartDispatcherWithExecutors keeps one queue-discovery goroutine separate
-// from a bounded executor pool.
-// scan is never asked for more work than the pool can immediately hold.
-func StartDispatcherWithExecutors[T any](ctx context.Context, config DispatcherExecutorConfig, scan func(context.Context, int) ([]T, error), execute func(context.Context, T)) <-chan struct{} {
+// from a bounded executor pool. scan is never asked for more work than the pool
+// can immediately hold.
+func StartDispatcherWithExecutors[T any](ctx context.Context, config DispatcherExecutorConfig, scan func(context.Context, int) ([]T, error), execute func(context.Context, T) (TickResult, error)) <-chan struct{} {
 	done := make(chan struct{})
 	if ctx == nil || ctx.Err() != nil || scan == nil || execute == nil {
 		close(done)
@@ -239,6 +299,7 @@ func StartDispatcherWithExecutors[T any](ctx context.Context, config DispatcherE
 	if config.MaxInterval < config.MinInterval {
 		config.MaxInterval = config.MinInterval
 	}
+	identity := config.identity()
 	jobs := make(chan T, config.Concurrency)
 	slots := make(chan struct{}, config.Concurrency)
 	wake := make(chan struct{}, 1)
@@ -251,7 +312,9 @@ func StartDispatcherWithExecutors[T any](ctx context.Context, config DispatcherE
 				defer executors.Done()
 				for job := range jobs {
 					if ctx.Err() == nil {
-						execute(ctx, job)
+						_, _ = observeTick(ctx, identity, "execute", func(executeCtx context.Context) (TickResult, error) {
+							return execute(executeCtx, job)
+						})
 					}
 					<-slots
 					select {
@@ -264,19 +327,26 @@ func StartDispatcherWithExecutors[T any](ctx context.Context, config DispatcherE
 		interval := config.MinInterval
 		for {
 			available := config.Concurrency - len(slots)
+			worked := false
 			if available > 0 {
-				items, err := scan(ctx, available)
-				if err == nil {
+				var items []T
+				result, err := observeTick(ctx, identity, "scan", func(scanCtx context.Context) (TickResult, error) {
+					var scanErr error
+					items, scanErr = scan(scanCtx, available)
 					if len(items) > available {
 						items = items[:available]
 					}
+					return TickResult{Worked: len(items) > 0, ProcessedCount: len(items)}, scanErr
+				})
+				if err == nil {
+					worked = result.Worked
 					for _, item := range items {
 						slots <- struct{}{}
 						jobs <- item
 					}
 				}
-				interval = nextAdaptiveInterval(interval, config.MinInterval, config.MaxInterval, err == nil && len(items) > 0)
 			}
+			interval = nextAdaptiveInterval(interval, config.MinInterval, config.MaxInterval, worked)
 			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():
@@ -297,11 +367,9 @@ func StartDispatcherWithExecutors[T any](ctx context.Context, config DispatcherE
 	return done
 }
 
-// StartWakeableDispatcherWithExecutors dispatches committed task locators to a
-// bounded executor pool and runs a low-frequency durable recovery query. The
-// wakeup channel is deliberately lossy; database claim remains the ownership
-// boundary and recovery remains the source of eventual progress.
-func StartWakeableDispatcherWithExecutors[T any](ctx context.Context, config DispatcherExecutorConfig, recoveryInterval time.Duration, wakeups <-chan T, recover func(context.Context, int) ([]T, error), execute func(context.Context, T)) <-chan struct{} {
+// StartWakeableDispatcherWithExecutors dispatches committed task locators to
+// a bounded executor pool and runs a low-frequency durable recovery query.
+func StartWakeableDispatcherWithExecutors[T any](ctx context.Context, config DispatcherExecutorConfig, recoveryInterval time.Duration, wakeups <-chan T, recover func(context.Context, int) ([]T, error), execute func(context.Context, T) (TickResult, error)) <-chan struct{} {
 	done := make(chan struct{})
 	if ctx == nil || ctx.Err() != nil || recover == nil || execute == nil {
 		close(done)
@@ -313,10 +381,7 @@ func StartWakeableDispatcherWithExecutors[T any](ctx context.Context, config Dis
 	if recoveryInterval <= 0 {
 		recoveryInterval = 30 * time.Second
 	}
-	name := strings.TrimSpace(config.Name)
-	if name == "" {
-		name = "worker"
-	}
+	identity := config.identity()
 	jobs := make(chan T, config.Concurrency)
 	completed := make(chan struct{}, config.Concurrency)
 	go func() {
@@ -328,7 +393,9 @@ func StartWakeableDispatcherWithExecutors[T any](ctx context.Context, config Dis
 				defer executors.Done()
 				for job := range jobs {
 					if ctx.Err() == nil {
-						runTick(ctx, name, func() { execute(ctx, job) })
+						_, _ = observeTick(ctx, identity, "execute", func(executeCtx context.Context) (TickResult, error) {
+							return execute(executeCtx, job)
+						})
 					}
 					completed <- struct{}{}
 				}
@@ -340,13 +407,17 @@ func StartWakeableDispatcherWithExecutors[T any](ctx context.Context, config Dis
 			if available <= 0 {
 				return
 			}
-			items, err := recover(ctx, available)
+			var items []T
+			_, err := observeTick(ctx, identity, "recovery", func(recoveryCtx context.Context) (TickResult, error) {
+				var recoveryErr error
+				items, recoveryErr = recover(recoveryCtx, available)
+				if len(items) > available {
+					items = items[:available]
+				}
+				return TickResult{Worked: len(items) > 0, ProcessedCount: len(items)}, recoveryErr
+			})
 			if err != nil {
-				logging.FromContext(ctx).Error("worker recovery failed", zap.String("worker", name), zap.Error(err))
 				return
-			}
-			if len(items) > available {
-				items = items[:available]
 			}
 			for _, item := range items {
 				jobs <- item
