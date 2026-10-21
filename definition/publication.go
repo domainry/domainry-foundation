@@ -27,7 +27,7 @@ func (s Store) Publish(ctx context.Context, command PublishCommand) (PublishResu
 	command.SourceID = strings.TrimSpace(command.SourceID)
 	command.PublishedBy = strings.TrimSpace(command.PublishedBy)
 	if command.ResourceKey == "" || command.ExpectedCurrentVersionID == "" || command.SchemaVersion == "" || command.SourceKind == "" || command.SourceID == "" || command.PublishedBy == "" {
-		return PublishResult{}, &Error{StatusCode: 400, Code: "metadata.definition_publication_invalid"}
+		return PublishResult{}, &Error{Kind: KindBadRequest, Code: "metadata.definition_publication_invalid"}
 	}
 	hash, err := payloadHash(command.Payload, command.SchemaHash)
 	if err != nil {
@@ -146,7 +146,7 @@ func (s Store) Disable(ctx context.Context, command DisableCommand) error {
 	expected := strings.TrimSpace(command.ExpectedCurrentVersionID)
 	disabledBy := strings.TrimSpace(command.DisabledBy)
 	if key == "" || expected == "" || expected == NoCurrentVersion || disabledBy == "" {
-		return &Error{StatusCode: 400, Code: "metadata.definition_disable_invalid"}
+		return &Error{Kind: KindBadRequest, Code: "metadata.definition_disable_invalid"}
 	}
 	disable := func(executor DBTX) error {
 		now := time.Now().UTC().UnixMilli()
@@ -200,7 +200,7 @@ func (s Store) GetVersion(ctx context.Context, value VersionQuery) (Version, boo
 	versionID := strings.TrimSpace(value.VersionID)
 	schemaVersion := strings.TrimSpace(value.SchemaVersion)
 	if key == "" || (versionID == "") == (schemaVersion == "") {
-		return Version{}, false, &Error{StatusCode: 400, Code: "metadata.definition_version_query_invalid"}
+		return Version{}, false, &Error{Kind: KindBadRequest, Code: "metadata.definition_version_query_invalid"}
 	}
 	predicates := []query.Predicate{query.Equal("installation_id", s.installationID), query.Equal("owner", owner), query.Equal("kind", kind), query.Equal("definition_key", key)}
 	if versionID != "" {
@@ -237,7 +237,7 @@ func (s Store) ListVersions(ctx context.Context, value VersionListQuery) ([]Vers
 	}
 	key := strings.TrimSpace(value.ResourceKey)
 	if key == "" {
-		return nil, &Error{StatusCode: 400, Code: "metadata.definition_version_query_invalid"}
+		return nil, &Error{Kind: KindBadRequest, Code: "metadata.definition_version_query_invalid"}
 	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).
 		Columns("id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at").
@@ -270,5 +270,5 @@ func (s Store) ListVersions(ctx context.Context, value VersionListQuery) ([]Vers
 }
 
 func revisionConflict() error {
-	return &Error{StatusCode: 409, Code: "metadata.definition_revision_conflict"}
+	return &Error{Kind: KindConflict, Code: "metadata.definition_revision_conflict"}
 }

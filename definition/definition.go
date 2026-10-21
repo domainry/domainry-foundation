@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/apperror"
 	ormmigration "github.com/domainry/domainry-orm/migration"
 	"github.com/domainry/domainry-orm/sqlhost"
 )
@@ -29,10 +30,22 @@ const (
 	MigrationOwner   = "shared/definitions"
 )
 
+type ErrorKind = apperror.ErrorKind
+
+const (
+	KindBadRequest  = apperror.KindBadRequest
+	KindForbidden   = apperror.KindForbidden
+	KindNotFound    = apperror.KindNotFound
+	KindConflict    = apperror.KindConflict
+	KindRateLimited = apperror.KindRateLimited
+	KindUnavailable = apperror.KindUnavailable
+	KindInternal    = apperror.KindInternal
+)
+
 type Error struct {
-	StatusCode int
-	Code       string
-	Cause      error
+	Kind  ErrorKind
+	Code  string
+	Cause error
 }
 
 func (e *Error) Error() string {
@@ -59,22 +72,7 @@ func (e *Error) ApplicationErrorKind() string {
 	if e == nil {
 		return ""
 	}
-	switch e.StatusCode {
-	case 400, 413, 422:
-		return "bad_request"
-	case 401, 403:
-		return "forbidden"
-	case 404:
-		return "not_found"
-	case 409, 412:
-		return "conflict"
-	case 429:
-		return "rate_limited"
-	case 502, 503, 504:
-		return "unavailable"
-	default:
-		return "internal"
-	}
+	return string(apperror.NormalizeKind(string(e.Kind)))
 }
 
 func (e *Error) ErrorCode() string {

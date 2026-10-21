@@ -45,11 +45,11 @@ var registeredKinds = map[string]map[string]bool{
 func normalizeOwnerKind(owner, kind string) (string, string, error) {
 	owner, kind = strings.TrimSpace(owner), strings.TrimSpace(kind)
 	if owner == "" {
-		return "", "", &Error{StatusCode: 400, Code: "metadata.definition_owner_required"}
+		return "", "", &Error{Kind: KindBadRequest, Code: "metadata.definition_owner_required"}
 	}
 	registered, found := registeredKinds[owner]
 	if !found || !registered[kind] {
-		return "", "", &Error{StatusCode: 400, Code: "metadata.definition_kind_unregistered"}
+		return "", "", &Error{Kind: KindBadRequest, Code: "metadata.definition_kind_unregistered"}
 	}
 	return owner, kind, nil
 }
@@ -96,17 +96,17 @@ func (s Store) ReplaceSourceSnapshot(ctx context.Context, snapshot SourceSnapsho
 
 func validateSourceIdentity(owner, schemaVersion, sourceKind, sourceID string) error {
 	if strings.TrimSpace(owner) == "" || strings.TrimSpace(schemaVersion) == "" || strings.TrimSpace(sourceKind) == "" || strings.TrimSpace(sourceID) == "" {
-		return &Error{StatusCode: 400, Code: "metadata.projection_identity_required"}
+		return &Error{Kind: KindBadRequest, Code: "metadata.projection_identity_required"}
 	}
 	if _, found := registeredKinds[strings.TrimSpace(owner)]; !found {
-		return &Error{StatusCode: 400, Code: "metadata.definition_owner_unregistered"}
+		return &Error{Kind: KindBadRequest, Code: "metadata.definition_owner_unregistered"}
 	}
 	return nil
 }
 
 func (s Store) validate() error {
 	if s.database == nil || s.dialect == nil || s.installationID == "" || s.writeMu == nil {
-		return &Error{StatusCode: 503, Code: "metadata.store_unavailable"}
+		return &Error{Kind: KindUnavailable, Code: "metadata.store_unavailable"}
 	}
 	return nil
 }
@@ -126,7 +126,7 @@ func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, sch
 	}
 	for _, value := range definitions {
 		if value.Owner != "" && strings.TrimSpace(value.Owner) != owner {
-			return &Error{StatusCode: 400, Code: "metadata.definition_owner_mismatch"}
+			return &Error{Kind: KindBadRequest, Code: "metadata.definition_owner_mismatch"}
 		}
 		_, kind, err := normalizeOwnerKind(owner, value.ResourceType)
 		if err != nil {
@@ -134,7 +134,7 @@ func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, sch
 		}
 		key := strings.TrimSpace(value.ResourceKey)
 		if key == "" || len(value.Payload) == 0 || !json.Valid(value.Payload) {
-			return &Error{StatusCode: 400, Code: "metadata.definition_invalid"}
+			return &Error{Kind: KindBadRequest, Code: "metadata.definition_invalid"}
 		}
 		hash, err := payloadHash(value.Payload, value.SchemaHash)
 		if err != nil {
@@ -207,11 +207,11 @@ func (s Store) List(ctx context.Context, value Query) ([]Definition, error) {
 	}
 	owner := strings.TrimSpace(value.Owner)
 	if owner == "" && !value.CrossOwner {
-		return nil, &Error{StatusCode: 400, Code: "metadata.definition_owner_required"}
+		return nil, &Error{Kind: KindBadRequest, Code: "metadata.definition_owner_required"}
 	}
 	if owner != "" {
 		if _, found := registeredKinds[owner]; !found {
-			return nil, &Error{StatusCode: 400, Code: "metadata.definition_owner_unregistered"}
+			return nil, &Error{Kind: KindBadRequest, Code: "metadata.definition_owner_unregistered"}
 		}
 	}
 	predicates := []query.Predicate{query.Equal("installation_id", s.installationID), query.Equal("status", "active")}
@@ -224,7 +224,7 @@ func (s Store) List(ctx context.Context, value Query) ([]Definition, error) {
 				return nil, err
 			}
 		} else if !registeredKind(kind) {
-			return nil, &Error{StatusCode: 400, Code: "metadata.definition_kind_unregistered"}
+			return nil, &Error{Kind: KindBadRequest, Code: "metadata.definition_kind_unregistered"}
 		}
 		predicates = append(predicates, query.Equal("kind", kind))
 	}
@@ -326,12 +326,12 @@ func columns() []string {
 
 func payloadHash(payload json.RawMessage, declared string) (string, error) {
 	if len(payload) == 0 || !json.Valid(payload) {
-		return "", &Error{StatusCode: 400, Code: "metadata.definition_invalid"}
+		return "", &Error{Kind: KindBadRequest, Code: "metadata.definition_invalid"}
 	}
 	sum := sha256.Sum256(payload)
 	actual := hex.EncodeToString(sum[:])
 	if declared = strings.TrimSpace(declared); declared != "" && declared != actual {
-		return "", &Error{StatusCode: 400, Code: "metadata.definition_hash_mismatch"}
+		return "", &Error{Kind: KindBadRequest, Code: "metadata.definition_hash_mismatch"}
 	}
 	return actual, nil
 }

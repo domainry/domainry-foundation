@@ -79,5 +79,5 @@ func versionID(definitionID, schemaVersion, schemaHash string) string {
 }
 
 func versionConflict() error {
-	return &Error{StatusCode: 409, Code: "backend.metadata.definition_version_conflict"}
+	return &Error{Kind: KindConflict, Code: "backend.metadata.definition_version_conflict"}
 }
