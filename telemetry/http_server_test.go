@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/domainry/domainry-foundation/logging"
 	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -54,7 +55,7 @@ func TestHTTPServerMiddlewareExtractsContextAndWritesOneTerminalEvent(t *testing
 		t.Fatalf("terminal events=%d entries=%#v", len(entries), observed.All())
 	}
 	fields := entries[0].ContextMap()
-	if fields["route"] != "/widgets/{id}" || fields["method"] != http.MethodGet || fields["listener_group"] != "public" {
+	if fields["route"] != "/widgets/{id}" || fields["method"] != http.MethodGet || fields["listener_group"] != "public" || fields[logging.LogTypeField] != logging.LogTypeAccess {
 		t.Fatalf("fields=%#v", fields)
 	}
 	if _, leaked := fields["path"]; leaked {

@@ -60,7 +60,8 @@ func TestProductionLoggingUsesFoundationBoundary(t *testing.T) {
 				zapAliases[alias] = true
 			}
 		}
-		if filepath.ToSlash(relative) == "logging/logging.go" || len(zapAliases) == 0 {
+		relative = filepath.ToSlash(relative)
+		if relative == "logging/logging.go" || relative == "logging/file_archive.go" || len(zapAliases) == 0 {
 			return nil
 		}
 		ast.Inspect(parsed, func(node ast.Node) bool {

@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -22,6 +23,13 @@ const (
 	defaultEncoding           = "json"
 	defaultSamplingInitial    = 100
 	defaultSamplingThereafter = 100
+	defaultFileMaxSizeMB      = 100
+	defaultFileRetentionDays  = 30
+	defaultFileMaxTotalSizeMB = 2048
+
+	LogTypeField       = "log_type"
+	LogTypeApplication = "application"
+	LogTypeAccess      = "access"
 )
 
 // Config is the complete process-owned logging contract. A hosted module must
@@ -38,6 +46,12 @@ type Config struct {
 	ErrorOutputPaths   []string
 	SamplingInitial    int
 	SamplingThereafter int
+	DisableConsole     bool
+	FileDirectory      string
+	FileMaxSizeMB      int
+	FileRetentionDays  int
+	FileMaxTotalSizeMB int
+	configurationError error
 }
 
 // Failure describes stable operational failure context. Raw error text is
@@ -55,7 +69,7 @@ func ConfigFromEnvironment(serviceName, serviceVersion string) Config {
 	if instanceID == "" {
 		instanceID = strings.TrimSpace(os.Getenv("RUNTIME_INSTANCE_ID"))
 	}
-	return Config{
+	config := Config{
 		ServiceName:        strings.TrimSpace(serviceName),
 		ServiceVersion:     strings.TrimSpace(serviceVersion),
 		Environment:        strings.TrimSpace(os.Getenv("APP_ENV")),
@@ -65,24 +79,66 @@ func ConfigFromEnvironment(serviceName, serviceVersion string) Config {
 		Encoding:           strings.TrimSpace(os.Getenv("LOG_ENCODING")),
 		SamplingInitial:    defaultSamplingInitial,
 		SamplingThereafter: defaultSamplingThereafter,
+		FileDirectory:      strings.TrimSpace(os.Getenv("LOG_DIRECTORY")),
+		FileMaxSizeMB:      defaultFileMaxSizeMB,
+		FileRetentionDays:  defaultFileRetentionDays,
+		FileMaxTotalSizeMB: defaultFileMaxTotalSizeMB,
 	}
+	if raw := strings.TrimSpace(os.Getenv("LOG_CONSOLE")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			config.configurationError = fmt.Errorf("invalid LOG_CONSOLE %q: must be true or false", raw)
+		} else {
+			config.DisableConsole = !enabled
+		}
+	}
+	for _, value := range []struct {
+		name   string
+		target *int
+	}{
+		{name: "LOG_MAX_FILE_SIZE_MB", target: &config.FileMaxSizeMB},
+		{name: "LOG_RETENTION_DAYS", target: &config.FileRetentionDays},
+		{name: "LOG_MAX_TOTAL_SIZE_MB", target: &config.FileMaxTotalSizeMB},
+	} {
+		raw := strings.TrimSpace(os.Getenv(value.name))
+		if raw == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			config.configurationError = errors.Join(config.configurationError, fmt.Errorf("invalid %s %q: must be a positive integer", value.name, raw))
+			continue
+		}
+		*value.target = parsed
+	}
+	return config
 }
 
 // New creates the process root logger. All hosted modules share its Core and
 // derive request-scoped child loggers through FromContext.
 func New(config Config) (*zap.Logger, error) {
+	if config.configurationError != nil {
+		return nil, config.configurationError
+	}
 	cfg, err := zapConfig(config)
 	if err != nil {
 		return nil, err
 	}
-	return cfg.Build()
+	return buildLogger(config, cfg)
 }
 
 // Validate checks the process logging contract without constructing or
 // installing a logger. Process configuration owners use it to fail startup on
 // unsupported levels or encodings before any long-lived resource is opened.
 func Validate(config Config) error {
+	if config.configurationError != nil {
+		return config.configurationError
+	}
 	_, err := zapConfig(config)
+	if err != nil {
+		return err
+	}
+	_, err = normalizedFileArchiveConfig(config)
 	return err
 }
 
@@ -275,6 +331,13 @@ func FromContext(ctx context.Context) *zap.Logger {
 		logger = logger.With(fields...)
 	}
 	return logger
+}
+
+// AccessLogger derives the HTTP access stream from the one process-owned root
+// logger. The explicit type is routing metadata, while severity remains an
+// independent description of the request outcome.
+func AccessLogger(ctx context.Context) *zap.Logger {
+	return FromContext(ctx).With(zap.String(LogTypeField, LogTypeAccess))
 }
 
 // Fields converts a dynamic field map into deterministic zap fields.

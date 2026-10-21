@@ -15,7 +15,7 @@ Workflow, or other product-domain behavior.
 - `filelock`: cross-platform process file locking.
 - `health`: bounded technical check evaluation and diagnostic history.
 - `idempotency`: fingerprints, receipt decisions, audit-safe facts, and bounded metrics.
-- `logging`: structured Zap logging with stable error and request fields.
+- `logging`: one structured Zap root logger with stable error/request fields and optional application/access archives.
 - `mutation`: storage mutation conflicts, transient failures, and transaction metrics.
 - `modulehttp`: deployment-neutral, host-enforced HTTP Adapter declarations for in-process modules.
 - `moduleinfo`: normalized active-module capabilities, deployment topology, HTTP, and persistence ownership.

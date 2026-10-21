@@ -1,13 +1,16 @@
 package logging
 
 import (
+	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/domainry/domainry-foundation/apperror"
 	"github.com/domainry/domainry-foundation/idempotency"
@@ -23,7 +26,17 @@ func TestNewReadsEnvironmentConfiguration(t *testing.T) {
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("DOMAINRY_DEPLOYMENT_ID", "deployment-test")
 	t.Setenv("DOMAINRY_INSTANCE_ID", "instance-test")
-	logger, err := New(ConfigFromEnvironment("runtime-test", "v1"))
+	t.Setenv("LOG_DIRECTORY", "/var/log/domainry")
+	t.Setenv("LOG_CONSOLE", "false")
+	t.Setenv("LOG_MAX_FILE_SIZE_MB", "64")
+	t.Setenv("LOG_RETENTION_DAYS", "14")
+	t.Setenv("LOG_MAX_TOTAL_SIZE_MB", "512")
+	config := ConfigFromEnvironment("runtime-test", "v1")
+	if config.FileDirectory != "/var/log/domainry" || !config.DisableConsole || config.FileMaxSizeMB != 64 || config.FileRetentionDays != 14 || config.FileMaxTotalSizeMB != 512 {
+		t.Fatalf("file logging config=%+v", config)
+	}
+	config.FileDirectory = t.TempDir()
+	logger, err := New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +44,7 @@ func TestNewReadsEnvironmentConfiguration(t *testing.T) {
 	if !logger.Core().Enabled(zapcore.DebugLevel) {
 		t.Fatal("debug logging was not enabled")
 	}
-	config := ConfigFromEnvironment("runtime-test", "v1")
+	config = ConfigFromEnvironment("runtime-test", "v1")
 	if config.Environment != "test" || config.DeploymentID != "deployment-test" || config.InstanceID != "instance-test" {
 		t.Fatalf("environment config=%+v", config)
 	}
@@ -47,6 +60,232 @@ func TestNewReadsEnvironmentConfiguration(t *testing.T) {
 	}
 	if !built.DisableStacktrace {
 		t.Fatal("automatic Zap stacktraces must remain disabled")
+	}
+}
+
+func TestNewRejectsInvalidFileLoggingEnvironment(t *testing.T) {
+	for name, value := range map[string]string{
+		"LOG_CONSOLE":           "sometimes",
+		"LOG_MAX_FILE_SIZE_MB":  "many",
+		"LOG_RETENTION_DAYS":    "0",
+		"LOG_MAX_TOTAL_SIZE_MB": "-1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, value)
+			if _, err := New(ConfigFromEnvironment("runtime-test", "v1")); err == nil {
+				t.Fatalf("invalid %s=%q was accepted", name, value)
+			}
+		})
+	}
+}
+
+func TestFileLoggingRoutesApplicationAndAccessBeforeEncoding(t *testing.T) {
+	directory := t.TempDir()
+	logger, err := New(Config{
+		ServiceName: "stock/runtime", DisableConsole: true, FileDirectory: directory,
+		FileMaxSizeMB: 1, FileRetentionDays: 7, FileMaxTotalSizeMB: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := zap.L()
+	zap.ReplaceGlobals(logger)
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+	logger.Info("process_started")
+	logger.Error("worker_failed", zap.String("error_code", "backend.worker.failed"))
+	AccessLogger(t.Context()).Info("http_request", zap.Int("status", 200))
+	AccessLogger(t.Context()).Error("http_request", zap.Int("status", 500))
+	if err := Sync(logger); err != nil {
+		t.Fatal(err)
+	}
+	day := time.Now().UTC().Format(archiveDateLayout)
+	application, err := os.ReadFile(filepath.Join(directory, "stock_runtime.application."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	access, err := os.ReadFile(filepath.Join(directory, "stock_runtime.access."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(application); !strings.Contains(text, `"msg":"process_started"`) || !strings.Contains(text, `"msg":"worker_failed"`) || !strings.Contains(text, `"log_type":"application"`) || strings.Contains(text, `"msg":"http_request"`) {
+		t.Fatalf("application log=%s", text)
+	}
+	if text := string(access); strings.Count(text, `"msg":"http_request"`) != 2 || !strings.Contains(text, `"status":200`) || !strings.Contains(text, `"status":500`) || !strings.Contains(text, `"log_type":"access"`) || strings.Contains(text, `"msg":"worker_failed"`) {
+		t.Fatalf("access log=%s", text)
+	}
+}
+
+func TestAccessLoggingIsNotFilteredByApplicationLevel(t *testing.T) {
+	directory := t.TempDir()
+	logger, err := New(Config{
+		ServiceName: "stock-runtime", Level: "error", DisableConsole: true, FileDirectory: directory,
+		FileMaxSizeMB: 1, FileRetentionDays: 7, FileMaxTotalSizeMB: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := zap.L()
+	zap.ReplaceGlobals(logger)
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+	logger.Info("application_info")
+	AccessLogger(t.Context()).Info("http_request", zap.Int("status", 200))
+	if err := Sync(logger); err != nil {
+		t.Fatal(err)
+	}
+	day := time.Now().UTC().Format(archiveDateLayout)
+	if _, err := os.Stat(filepath.Join(directory, "stock-runtime.application."+day+".log")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("application info bypassed LOG_LEVEL=error: %v", err)
+	}
+	access, err := os.ReadFile(filepath.Join(directory, "stock-runtime.access."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(access), `"msg":"http_request"`) {
+		t.Fatalf("access log=%s", access)
+	}
+}
+
+func TestAccessLoggingIsNeverSampled(t *testing.T) {
+	directory := t.TempDir()
+	logger, err := New(Config{
+		ServiceName: "stock-runtime", DisableConsole: true, FileDirectory: directory,
+		FileMaxSizeMB: 1, FileRetentionDays: 7, FileMaxTotalSizeMB: 4,
+		SamplingInitial: 1, SamplingThereafter: 100,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := zap.L()
+	zap.ReplaceGlobals(logger)
+	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
+	for index := 0; index < 250; index++ {
+		AccessLogger(t.Context()).Info("http_request", zap.Int("status", 200))
+	}
+	if err := Sync(logger); err != nil {
+		t.Fatal(err)
+	}
+	day := time.Now().UTC().Format(archiveDateLayout)
+	access, err := os.ReadFile(filepath.Join(directory, "stock-runtime.access."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(access), `"msg":"http_request"`); count != 250 {
+		t.Fatalf("access events=%d want=250", count)
+	}
+}
+
+func TestRollingFileSinkRotatesByUTCDateAndSizeAndCompressesArchives(t *testing.T) {
+	directory := t.TempDir()
+	current := time.Date(2026, time.October, 21, 23, 59, 0, 0, time.FixedZone("CST", 8*60*60))
+	manager, err := newArchiveManager(fileArchiveConfig{
+		directory: directory, serviceName: "stock-runtime", maxFileBytes: 16,
+		retentionDays: 7, maxTotalBytes: 1024,
+	}, func() time.Time { return current })
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &rollingFileSink{manager: manager, logType: LogTypeApplication}
+	if _, err := sink.Write([]byte("first-record\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sink.Write([]byte("second-record\n")); err != nil {
+		t.Fatal(err)
+	}
+	// 23:59 at UTC+8 is still the same UTC archive day. Advancing nine hours
+	// crosses midnight UTC and must rotate to the next canonical day.
+	current = current.Add(9 * time.Hour)
+	if _, err := sink.Write([]byte("third-record\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := sink.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"stock-runtime.application.2026-10-21.log.gz",
+		"stock-runtime.application.2026-10-21.1.log.gz",
+		"stock-runtime.application.2026-10-22.log",
+	} {
+		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
+			t.Fatalf("missing %s: %v", name, err)
+		}
+	}
+	compressed, err := os.Open(filepath.Join(directory, "stock-runtime.application.2026-10-21.log.gz"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := gzip.NewReader(compressed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := errors.Join(reader.Close(), compressed.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "first-record\n" {
+		t.Fatalf("compressed content=%q", content)
+	}
+}
+
+func TestArchiveMaintenanceRemovesExpiredFiles(t *testing.T) {
+	directory := t.TempDir()
+	for name := range map[string]bool{
+		"stock-runtime.application.2026-10-01.log": true,
+		"stock-runtime.access.2026-10-20.log":      true,
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("record\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err := newArchiveManager(fileArchiveConfig{
+		directory: directory, serviceName: "stock-runtime", maxFileBytes: 100,
+		retentionDays: 7, maxTotalBytes: 1024,
+	}, func() time.Time { return time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stock-runtime.application.2026-10-01.log")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired archive remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stock-runtime.access.2026-10-20.log.gz")); err != nil {
+		t.Fatalf("retained archive was not compressed: %v", err)
+	}
+}
+
+func TestArchiveMaintenanceRemovesOldestDayAcrossLogTypesFirst(t *testing.T) {
+	directory := t.TempDir()
+	files := []string{
+		"stock-runtime.application.2026-10-20.log.gz",
+		"stock-runtime.access.2026-10-19.log.gz",
+		"stock-runtime.access.2026-10-21.log",
+	}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("12345678"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager, err := newArchiveManager(fileArchiveConfig{
+		directory: directory, serviceName: "stock-runtime", maxFileBytes: 8,
+		retentionDays: 30, maxTotalBytes: 16,
+	}, func() time.Time { return time.Date(2026, time.October, 21, 0, 0, 0, 0, time.UTC) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manager == nil {
+		t.Fatal("archive manager was not created")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stock-runtime.access.2026-10-19.log.gz")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oldest archive remains: %v", err)
+	}
+	for _, name := range files[0:] {
+		if name == "stock-runtime.access.2026-10-19.log.gz" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(directory, name)); err != nil {
+			t.Fatalf("newer archive %s was removed: %v", name, err)
+		}
 	}
 }
 

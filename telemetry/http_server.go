@@ -291,10 +291,11 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 			failureFields = append(failureFields, logging.ErrorFields(recorder.internalErr, logging.Failure{Stage: "http_handler"})...)
 			logger.Error("http_internal_failure", failureFields...)
 		}
+		accessLogger := logging.AccessLogger(request.Context())
 		if recorder.status >= http.StatusInternalServerError {
-			logger.Error("http_request", fields...)
+			accessLogger.Error("http_request", fields...)
 		} else {
-			logger.Info("http_request", fields...)
+			accessLogger.Info("http_request", fields...)
 		}
 	})
 }
