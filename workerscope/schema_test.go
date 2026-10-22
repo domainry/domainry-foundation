@@ -35,7 +35,7 @@ func TestRegisteredOwnersAndStableIdentity(t *testing.T) {
 			t.Fatalf("registration %q=%+v found=%v", owner, value, found)
 		}
 		first, second := NewIdentity(owner, "scope-a"), NewIdentity(owner, "scope-a")
-		if first != second || first.ID == "" {
+		if first != second || first.Owner == "" || first.ScopeKey == "" {
 			t.Fatalf("unstable identity for %q: %+v %+v", owner, first, second)
 		}
 	}

@@ -15,7 +15,8 @@ import (
 const StatusFailed = "failed"
 
 type LeasedRecord struct {
-	ID                 string
+	ID                 int64
+	OperationID        string
 	WorkspaceID        string
 	ActionKey          string
 	ResourceType       string
@@ -47,7 +48,7 @@ type StartedRecord struct {
 
 type LeaseReclaim struct {
 	WorkspaceID        string
-	ID                 string
+	OperationID        string
 	RequestFingerprint string
 	LeaseOwner         string
 	LeaseExpiresAt     string
@@ -58,7 +59,7 @@ type LeaseReclaim struct {
 
 type LeaseCompletion struct {
 	WorkspaceID  string
-	ID           string
+	OperationID  string
 	LeaseOwner   string
 	FencingToken int64
 	Status       string
@@ -71,7 +72,7 @@ type LeaseCompletion struct {
 func InsertStarted(ctx context.Context, execer Execer, renderer ormdialect.Renderer, value StartedRecord) error {
 	value.Status = StatusStarted
 	for _, field := range []string{
-		value.ID, value.WorkspaceID, value.Owner, value.Kind, value.ActionKey, value.ResourceType,
+		value.OperationID, value.WorkspaceID, value.Owner, value.Kind, value.ActionKey, value.ResourceType,
 		value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason,
 		value.LeaseOwner, value.LeaseExpiresAt, value.CreatedAt, value.UpdatedAt,
 	} {
@@ -116,7 +117,7 @@ func InsertStarted(ctx context.Context, execer Execer, renderer ormdialect.Rende
 	statement, arguments, err := query.NewWorkspaceInsertBuilder(renderer, TableName, strings.TrimSpace(value.WorkspaceID)).
 		Columns(operationColumnsWithoutWorkspace()...).
 		Values(operationRecordValues(
-			value.ID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
+			value.OperationID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
 			value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, StatusStarted, "",
 			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON), "",
 			string(value.EvidenceJSON), value.LeaseOwner, leaseExpiresAt, value.FencingToken, expiresAt,
@@ -139,7 +140,7 @@ func LoadLeasedByKey(ctx context.Context, queryer Queryer, renderer ormdialect.R
 func LoadLeasedByID(ctx context.Context, queryer Queryer, renderer ormdialect.Renderer, workspaceID, owner, kind, id string) (LeasedRecord, bool, error) {
 	return loadLeased(ctx, queryer, renderer, workspaceID, query.And(
 		query.Equal("system_purpose", ""), query.Equal("owner", strings.TrimSpace(owner)),
-		query.Equal("kind", strings.TrimSpace(kind)), query.Equal("id", strings.TrimSpace(id)),
+		query.Equal("kind", strings.TrimSpace(kind)), query.Equal("operation_id", strings.TrimSpace(id)),
 	))
 }
 
@@ -162,7 +163,7 @@ func ReclaimStarted(ctx context.Context, execer Execer, renderer ormdialect.Rend
 		SetExpression("fencing_token", query.Add(query.Column("fencing_token"), query.Value(1))).
 		Set("started_at", updatedAt).Set("updated_at", updatedAt).
 		Where(query.And(
-			query.Equal("id", strings.TrimSpace(value.ID)), query.Equal("request_fingerprint", strings.TrimSpace(value.RequestFingerprint)),
+			query.Equal("operation_id", strings.TrimSpace(value.OperationID)), query.Equal("request_fingerprint", strings.TrimSpace(value.RequestFingerprint)),
 			query.Equal("status", StatusStarted), query.Equal("fencing_token", value.ExpectedToken),
 			query.LessThanOrEqual("lease_expires_at", expiredAt),
 		)).Build()
@@ -201,7 +202,7 @@ func CompleteLeased(ctx context.Context, execer Execer, renderer ormdialect.Rend
 		Set("failure_class", failureClass).Set("expires_at", expiresAt).
 		Set("finished_at", completedAt).Set("updated_at", completedAt).
 		Where(query.And(
-			query.Equal("id", strings.TrimSpace(value.ID)), query.Equal("lease_owner", strings.TrimSpace(value.LeaseOwner)),
+			query.Equal("operation_id", strings.TrimSpace(value.OperationID)), query.Equal("lease_owner", strings.TrimSpace(value.LeaseOwner)),
 			query.Equal("fencing_token", value.FencingToken), query.Equal("status", StatusStarted),
 		)).Build()
 	if err != nil {
@@ -218,7 +219,7 @@ func CompleteLeased(ctx context.Context, execer Execer, renderer ormdialect.Rend
 func loadLeased(ctx context.Context, queryer Queryer, renderer ormdialect.Renderer, workspaceID string, predicate query.Predicate) (LeasedRecord, bool, error) {
 	statement, arguments, err := query.NewWorkspaceSelectBuilder(renderer, TableName, strings.TrimSpace(workspaceID)).
 		Columns(
-			"id", "workspace_id", "action_key", "resource_type", "resource_id", "idempotency_key", "request_fingerprint",
+			"id", "operation_id", "workspace_id", "action_key", "resource_type", "resource_id", "idempotency_key", "request_fingerprint",
 			"requested_by", "status", "result_json", "lease_owner", "lease_expires_at", "fencing_token", "error_code",
 			"expires_at", "created_at", "updated_at",
 		).Where(predicate).Limit(1).Build()
@@ -229,7 +230,7 @@ func loadLeased(ctx context.Context, queryer Queryer, renderer ormdialect.Render
 	var resultJSON string
 	var leaseExpiresAt, expiresAt, createdAt, updatedAt int64
 	err = queryer.QueryRowContext(ctx, statement, arguments...).Scan(
-		&value.ID, &value.WorkspaceID, &value.ActionKey, &value.ResourceType, &value.ResourceID, &value.IdempotencyKey,
+		&value.ID, &value.OperationID, &value.WorkspaceID, &value.ActionKey, &value.ResourceType, &value.ResourceID, &value.IdempotencyKey,
 		&value.RequestFingerprint, &value.RequestedBy, &value.Status, &resultJSON, &value.LeaseOwner, &leaseExpiresAt,
 		&value.FencingToken, &value.ErrorCode, &expiresAt, &createdAt, &updatedAt,
 	)

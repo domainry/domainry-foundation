@@ -165,7 +165,8 @@ type VersionListQuery struct {
 }
 
 type Version struct {
-	ID            string          `json:"id"`
+	ID            int64           `json:"id"`
+	VersionID     string          `json:"version_id"`
 	Owner         string          `json:"owner"`
 	ResourceType  string          `json:"resource_type"`
 	ResourceKey   string          `json:"resource_key"`

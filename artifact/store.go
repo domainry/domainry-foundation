@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-orm/query"
 	ormschema "github.com/domainry/domainry-orm/schema"
 )
@@ -33,16 +34,27 @@ func (s *SQLStore) executor(ctx context.Context) Executor {
 
 func (s *SQLStore) Register(ctx context.Context, value Artifact) (Artifact, bool, error) {
 	value = normalizeArtifact(value)
+	if value.ArtifactID == "" {
+		var err error
+		value.ArtifactID, err = entityid.New("art")
+		if err != nil {
+			return Artifact{}, false, err
+		}
+	}
 	if err := validateArtifact(value); err != nil {
 		return Artifact{}, false, err
 	}
 	statement, arguments, err := query.NewWorkspaceInsertBuilder(s.renderer, TableName, value.WorkspaceID).
-		Columns(artifactColumns()[1:]...).Values(artifactValues(value)[1:]...).Build()
+		Columns(artifactColumns()[2:]...).Values(artifactValues(value)[2:]...).Build()
 	if err != nil {
 		return Artifact{}, false, err
 	}
 	if _, err = s.executor(ctx).ExecContext(ctx, statement, arguments...); err == nil {
-		return value, true, nil
+		stored, found, readErr := s.ByID(ctx, value.WorkspaceID, value.ArtifactID)
+		if readErr != nil || !found {
+			return Artifact{}, false, readErr
+		}
+		return stored, true, nil
 	}
 	existing, found, readErr := s.find(ctx, value.WorkspaceID, query.And(query.Equal("owner", value.Owner), query.Equal("kind", value.Kind), query.Equal("idempotency_key", value.IdempotencyKey)))
 	if readErr != nil {
@@ -55,7 +67,15 @@ func (s *SQLStore) Register(ctx context.Context, value Artifact) (Artifact, bool
 }
 
 func (s *SQLStore) ByID(ctx context.Context, workspaceID, id string) (Artifact, bool, error) {
-	return s.find(ctx, workspaceID, query.Equal("id", strings.TrimSpace(id)))
+	return s.find(ctx, workspaceID, query.Equal("artifact_id", strings.TrimSpace(id)))
+}
+
+func (s *SQLStore) ByIdempotency(ctx context.Context, workspaceID, owner, kind, idempotencyKey string) (Artifact, bool, error) {
+	return s.find(ctx, workspaceID, query.And(
+		query.Equal("owner", strings.TrimSpace(owner)),
+		query.Equal("kind", strings.TrimSpace(kind)),
+		query.Equal("idempotency_key", strings.TrimSpace(idempotencyKey)),
+	))
 }
 
 func (s *SQLStore) ByDownloadTokenHash(ctx context.Context, workspaceID, token string) (Artifact, bool, error) {
@@ -69,7 +89,7 @@ func (s *SQLStore) Transition(ctx context.Context, workspaceID, id string, expec
 	}
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(s.renderer, TableName, workspaceID).
 		Set("status", string(next)).Set("scan_status", string(scan)).Set("updated_at", at.UTC().UnixMilli()).
-		Where(query.And(query.Equal("id", strings.TrimSpace(id)), query.Equal("status", string(expected)))).Build()
+		Where(query.And(query.Equal("artifact_id", strings.TrimSpace(id)), query.Equal("status", string(expected)))).Build()
 	if err != nil {
 		return false, err
 	}
@@ -116,7 +136,7 @@ func (s *SQLStore) Bindings(ctx context.Context, workspaceID, artifactID string)
 	}
 	statement, arguments, err := query.NewWorkspaceSelectBuilder(s.renderer, BindingTableName, workspaceID).
 		Columns(bindingColumns()...).Where(query.Equal("artifact_id", strings.TrimSpace(artifactID))).
-		OrderBy(query.Ascending("created_at"), query.Ascending("id")).Build()
+		OrderBy(bindingOrder()...).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -166,7 +186,7 @@ func (s *SQLStore) List(ctx context.Context, workspaceID string, value Query) ([
 		for i := range ids {
 			values[i] = ids[i]
 		}
-		predicates = append(predicates, query.In("id", values...))
+		predicates = append(predicates, query.In("artifact_id", values...))
 	}
 	var builder *query.SelectBuilder
 	if workspaceID == "" {
@@ -208,11 +228,11 @@ func (s *SQLStore) Update(ctx context.Context, value Mutation) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	value.ID, value.Owner, value.Kind = strings.TrimSpace(value.ID), strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind)
-	if value.ID == "" || value.Owner == "" || value.Kind == "" || !validStatus(value.ExpectedStatus) || !validStatus(value.Status) || !validScan(value.ExpectedScanStatus) || !validScan(value.ScanStatus) || value.UpdatedAt.IsZero() || !json.Valid(value.Metadata) {
+	value.ArtifactID, value.Owner, value.Kind = strings.TrimSpace(value.ArtifactID), strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind)
+	if value.ArtifactID == "" || value.Owner == "" || value.Kind == "" || !validStatus(value.ExpectedStatus) || !validStatus(value.Status) || !validScan(value.ExpectedScanStatus) || !validScan(value.ScanStatus) || value.UpdatedAt.IsZero() || !json.Valid(value.Metadata) {
 		return false, fmt.Errorf("artifact mutation is invalid")
 	}
-	predicates := []query.Predicate{query.Equal("id", value.ID), query.Equal("owner", value.Owner), query.Equal("kind", value.Kind), query.Equal("status", string(value.ExpectedStatus)), query.Equal("scan_status", string(value.ExpectedScanStatus))}
+	predicates := []query.Predicate{query.Equal("artifact_id", value.ArtifactID), query.Equal("owner", value.Owner), query.Equal("kind", value.Kind), query.Equal("status", string(value.ExpectedStatus)), query.Equal("scan_status", string(value.ExpectedScanStatus))}
 	if !value.ExpectedUpdatedAt.IsZero() {
 		predicates = append(predicates, query.Equal("updated_at", value.ExpectedUpdatedAt.UTC().UnixMilli()))
 	}
@@ -281,7 +301,7 @@ func (s *SQLStore) bindingArtifactIDs(ctx context.Context, workspaceID string, v
 	} else {
 		builder = query.NewWorkspaceSelectBuilder(s.renderer, BindingTableName, workspaceID)
 	}
-	statement, arguments, err := builder.Columns("artifact_id").Where(query.And(predicates...)).OrderBy(query.Ascending("created_at"), query.Ascending("id")).Limit(limit).Build()
+	statement, arguments, err := builder.Columns("artifact_id").Where(query.And(predicates...)).OrderBy(bindingOrder()...).Limit(limit).Build()
 	if err != nil {
 		return nil, err
 	}
@@ -332,19 +352,27 @@ func artifactPredicates(value Query) []query.Predicate {
 }
 
 func artifactColumns() []string {
-	return []string{"workspace_id", "id", "owner", "kind", "idempotency_key", "created_by", "owner_org_id", "filename", "media_type", "content_sha256", "size_bytes", "storage_reference", "status", "expires_at", "scan_status", "download_token_sha256", "authorization_scope_sha256", "metadata_json", "created_at", "updated_at"}
+	return []string{"id", "workspace_id", "artifact_id", "owner", "kind", "idempotency_key", "created_by", "owner_org_id", "filename", "media_type", "content_sha256", "size_bytes", "storage_reference", "status", "expires_at", "scan_status", "download_token_sha256", "authorization_scope_sha256", "metadata_json", "created_at", "updated_at"}
 }
 
 func artifactValues(value Artifact) []any {
-	return []any{value.WorkspaceID, value.ID, value.Owner, value.Kind, value.IdempotencyKey, value.CreatedBy, value.OwnerOrgID, value.Filename, value.MediaType, value.ContentSHA256, value.SizeBytes, value.StorageReference, string(value.Status), optionalTime(value.ExpiresAt), string(value.ScanStatus), value.DownloadTokenSHA256, value.AuthorizationScopeSHA256, string(value.Metadata), value.CreatedAt.UTC().UnixMilli(), value.UpdatedAt.UTC().UnixMilli()}
+	return []any{value.ID, value.WorkspaceID, value.ArtifactID, value.Owner, value.Kind, value.IdempotencyKey, value.CreatedBy, value.OwnerOrgID, value.Filename, value.MediaType, value.ContentSHA256, value.SizeBytes, value.StorageReference, string(value.Status), optionalTime(value.ExpiresAt), string(value.ScanStatus), value.DownloadTokenSHA256, value.AuthorizationScopeSHA256, string(value.Metadata), value.CreatedAt.UTC().UnixMilli(), value.UpdatedAt.UTC().UnixMilli()}
 }
 
 func bindingColumns() []string {
-	return []string{"workspace_id", "id", "artifact_id", "owner", "kind", "resource_type", "resource_id", "field_key", "metadata_json", "created_at"}
+	return []string{"workspace_id", "artifact_id", "owner", "kind", "resource_type", "resource_id", "field_key", "metadata_json", "created_at"}
 }
 
 func bindingValues(value Binding) []any {
-	return []any{value.WorkspaceID, value.ID, value.ArtifactID, value.Owner, value.Kind, value.ResourceType, value.ResourceID, value.FieldKey, string(value.Metadata), value.CreatedAt.UTC().UnixMilli()}
+	return []any{value.WorkspaceID, value.ArtifactID, value.Owner, value.Kind, value.ResourceType, value.ResourceID, value.FieldKey, string(value.Metadata), value.CreatedAt.UTC().UnixMilli()}
+}
+
+func bindingOrder() []query.Order {
+	return []query.Order{
+		query.Ascending("created_at"), query.Ascending("artifact_id"), query.Ascending("owner"),
+		query.Ascending("kind"), query.Ascending("resource_type"), query.Ascending("resource_id"),
+		query.Ascending("field_key"),
+	}
 }
 
 type scanner interface{ Scan(...any) error }
@@ -354,7 +382,7 @@ func scanArtifact(row scanner) (Artifact, error) {
 	var status, scanStatus, metadata string
 	var createdAt, updatedAt int64
 	var expiresAt sql.NullInt64
-	err := row.Scan(&value.WorkspaceID, &value.ID, &value.Owner, &value.Kind, &value.IdempotencyKey, &value.CreatedBy, &value.OwnerOrgID, &value.Filename, &value.MediaType, &value.ContentSHA256, &value.SizeBytes, &value.StorageReference, &status, &expiresAt, &scanStatus, &value.DownloadTokenSHA256, &value.AuthorizationScopeSHA256, &metadata, &createdAt, &updatedAt)
+	err := row.Scan(&value.ID, &value.WorkspaceID, &value.ArtifactID, &value.Owner, &value.Kind, &value.IdempotencyKey, &value.CreatedBy, &value.OwnerOrgID, &value.Filename, &value.MediaType, &value.ContentSHA256, &value.SizeBytes, &value.StorageReference, &status, &expiresAt, &scanStatus, &value.DownloadTokenSHA256, &value.AuthorizationScopeSHA256, &metadata, &createdAt, &updatedAt)
 	if err != nil {
 		return value, err
 	}
@@ -371,7 +399,7 @@ func scanBinding(row scanner) (Binding, error) {
 	var value Binding
 	var metadata string
 	var createdAt int64
-	err := row.Scan(&value.WorkspaceID, &value.ID, &value.ArtifactID, &value.Owner, &value.Kind, &value.ResourceType, &value.ResourceID, &value.FieldKey, &metadata, &createdAt)
+	err := row.Scan(&value.WorkspaceID, &value.ArtifactID, &value.Owner, &value.Kind, &value.ResourceType, &value.ResourceID, &value.FieldKey, &metadata, &createdAt)
 	if err != nil {
 		return value, err
 	}
@@ -381,7 +409,7 @@ func scanBinding(row scanner) (Binding, error) {
 }
 
 func normalizeArtifact(value Artifact) Artifact {
-	value.ID, value.WorkspaceID, value.Owner, value.Kind = strings.TrimSpace(value.ID), strings.TrimSpace(value.WorkspaceID), strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind)
+	value.ArtifactID, value.WorkspaceID, value.Owner, value.Kind = strings.TrimSpace(value.ArtifactID), strings.TrimSpace(value.WorkspaceID), strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind)
 	value.IdempotencyKey, value.CreatedBy, value.OwnerOrgID = strings.TrimSpace(value.IdempotencyKey), strings.TrimSpace(value.CreatedBy), strings.TrimSpace(value.OwnerOrgID)
 	value.Filename, value.MediaType, value.ContentSHA256, value.StorageReference = strings.TrimSpace(value.Filename), strings.TrimSpace(value.MediaType), strings.TrimSpace(value.ContentSHA256), strings.TrimSpace(value.StorageReference)
 	value.DownloadTokenSHA256, value.AuthorizationScopeSHA256 = strings.TrimSpace(value.DownloadTokenSHA256), strings.TrimSpace(value.AuthorizationScopeSHA256)
@@ -398,14 +426,14 @@ func validateArtifact(value Artifact) error {
 	if _, found := RegistrationFor(value.Owner, value.Kind); !found {
 		return fmt.Errorf("artifact owner and kind are not registered")
 	}
-	if value.ID == "" || value.IdempotencyKey == "" || value.CreatedBy == "" || value.Filename == "" || value.MediaType == "" || value.ContentSHA256 == "" || value.StorageReference == "" || value.SizeBytes < 0 || !validStatus(value.Status) || !validScan(value.ScanStatus) || value.CreatedAt.IsZero() || !value.UpdatedAt.Equal(value.CreatedAt) || !json.Valid(value.Metadata) {
+	if entityid.Validate("art", value.ArtifactID) != nil || value.IdempotencyKey == "" || value.CreatedBy == "" || value.Filename == "" || value.MediaType == "" || value.ContentSHA256 == "" || value.StorageReference == "" || value.SizeBytes < 0 || !validStatus(value.Status) || !validScan(value.ScanStatus) || value.CreatedAt.IsZero() || !value.UpdatedAt.Equal(value.CreatedAt) || !json.Valid(value.Metadata) {
 		return fmt.Errorf("artifact identity, content, or state is invalid")
 	}
 	return nil
 }
 
 func normalizeBinding(value Binding) Binding {
-	value.ID, value.WorkspaceID, value.ArtifactID = strings.TrimSpace(value.ID), strings.TrimSpace(value.WorkspaceID), strings.TrimSpace(value.ArtifactID)
+	value.WorkspaceID, value.ArtifactID = strings.TrimSpace(value.WorkspaceID), strings.TrimSpace(value.ArtifactID)
 	value.Owner, value.Kind, value.ResourceType, value.ResourceID, value.FieldKey = strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind), strings.TrimSpace(value.ResourceType), strings.TrimSpace(value.ResourceID), strings.TrimSpace(value.FieldKey)
 	if len(bytes.TrimSpace(value.Metadata)) == 0 {
 		value.Metadata = json.RawMessage(`{}`)
@@ -417,7 +445,7 @@ func validateBinding(value Binding) error {
 	if _, err := normalizeWorkspace(value.WorkspaceID); err != nil {
 		return err
 	}
-	if value.ID == "" || value.ArtifactID == "" || value.Owner == "" || !BindingKindRegistered(value.Kind) || value.ResourceType == "" || value.ResourceID == "" || value.CreatedAt.IsZero() || !json.Valid(value.Metadata) {
+	if value.ArtifactID == "" || value.Owner == "" || !BindingKindRegistered(value.Kind) || value.ResourceType == "" || value.ResourceID == "" || value.CreatedAt.IsZero() || !json.Valid(value.Metadata) {
 		return fmt.Errorf("artifact binding is invalid")
 	}
 	return nil
@@ -502,11 +530,11 @@ func SchemaMigrationForDialect(renderer Dialect) (SchemaMigration, error) {
 	)
 	migration := SchemaMigration{Version: 1, Name: "shared_artifacts"}
 	tables := []*ormschema.TableBuilder{
-		ormschema.NewTable(renderer, TableName).IfNotExists().Columns(
-			required("workspace_id", ormschema.TextKey(indexedKeyLength)), required("id", ormschema.TextKey(indexedKeyLength)), required("owner", ormschema.TextKey(indexedKeyLength)), required("kind", ormschema.TextKey(indexedKeyLength)), required("idempotency_key", ormschema.TextKey(indexedKeyLength)), required("created_by", ormschema.TextKey(indexedKeyLength)), ormschema.Column("owner_org_id", ormschema.TextKey(indexedKeyLength)).NotNull().DefaultValue(""), required("filename", ormschema.Text()), required("media_type", ormschema.TextKey(255)), required("content_sha256", ormschema.TextKey(digestLength)), required("size_bytes", ormschema.BigInt()), required("storage_reference", ormschema.TextKey(storageReferenceLength)), required("status", ormschema.TextKey(64)), ormschema.Column("expires_at", ormschema.BigInt()), required("scan_status", ormschema.TextKey(64)), ormschema.Column("download_token_sha256", ormschema.TextKey(digestLength)).NotNull().DefaultValue(""), ormschema.Column("authorization_scope_sha256", ormschema.TextKey(digestLength)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.BigInt()), required("updated_at", ormschema.BigInt()),
-		).PrimaryKey("id").Unique("workspace_id", "owner", "kind", "idempotency_key").Unique("workspace_id", "owner", "kind", "storage_reference"),
-		ormschema.NewTable(renderer, BindingTableName).IfNotExists().Columns(
-			required("workspace_id", ormschema.TextKey(indexedKeyLength)), required("id", ormschema.TextKey(indexedKeyLength)), required("artifact_id", ormschema.TextKey(indexedKeyLength)), required("owner", ormschema.TextKey(indexedKeyLength)), required("kind", ormschema.TextKey(indexedKeyLength)), required("resource_type", ormschema.TextKey(indexedKeyLength)), required("resource_id", ormschema.TextKey(indexedKeyLength)), ormschema.Column("field_key", ormschema.TextKey(indexedKeyLength)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.BigInt()),
+		ormschema.NewTableWithRequiredColumns(renderer, TableName, physicalID()).IfNotExists().Columns(
+			required("workspace_id", ormschema.TextKey(indexedKeyLength)), required("artifact_id", ormschema.TextKey(indexedKeyLength)), required("owner", ormschema.TextKey(indexedKeyLength)), required("kind", ormschema.TextKey(indexedKeyLength)), required("idempotency_key", ormschema.TextKey(indexedKeyLength)), required("created_by", ormschema.TextKey(indexedKeyLength)), ormschema.Column("owner_org_id", ormschema.TextKey(indexedKeyLength)).NotNull().DefaultValue(""), required("filename", ormschema.Text()), required("media_type", ormschema.TextKey(255)), required("content_sha256", ormschema.TextKey(digestLength)), required("size_bytes", ormschema.BigInt()), required("storage_reference", ormschema.TextKey(storageReferenceLength)), required("status", ormschema.TextKey(64)), ormschema.Column("expires_at", ormschema.BigInt()), required("scan_status", ormschema.TextKey(64)), ormschema.Column("download_token_sha256", ormschema.TextKey(digestLength)).NotNull().DefaultValue(""), ormschema.Column("authorization_scope_sha256", ormschema.TextKey(digestLength)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.BigInt()), required("updated_at", ormschema.BigInt()),
+		).PrimaryKey("id").Unique("artifact_id").Unique("workspace_id", "owner", "kind", "idempotency_key").Unique("workspace_id", "owner", "kind", "storage_reference"),
+		ormschema.NewTableWithRequiredColumns(renderer, BindingTableName, physicalID()).IfNotExists().Columns(
+			required("workspace_id", ormschema.TextKey(indexedKeyLength)), required("artifact_id", ormschema.TextKey(indexedKeyLength)), required("owner", ormschema.TextKey(indexedKeyLength)), required("kind", ormschema.TextKey(indexedKeyLength)), required("resource_type", ormschema.TextKey(indexedKeyLength)), required("resource_id", ormschema.TextKey(indexedKeyLength)), ormschema.Column("field_key", ormschema.TextKey(indexedKeyLength)).NotNull().DefaultValue(""), required("metadata_json", ormschema.LongText()), required("created_at", ormschema.BigInt()),
 		).PrimaryKey("id").Unique("workspace_id", "artifact_id", "owner", "kind", "resource_type", "resource_id", "field_key"),
 	}
 	for _, table := range tables {
@@ -542,6 +570,10 @@ func SchemaMigrationForDialect(renderer Dialect) (SchemaMigration, error) {
 
 func required(name string, dataType ormschema.ColumnType) ormschema.ColumnDefinition {
 	return ormschema.Column(name, dataType).NotNull()
+}
+
+func physicalID() ormschema.ColumnDefinition {
+	return ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement()
 }
 
 var _ ManagedStore = (*SQLStore)(nil)

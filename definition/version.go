@@ -2,17 +2,15 @@ package definition
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"strings"
 
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-orm/query"
 )
 
 type versionValue struct {
-	DefinitionID   string
 	InstallationID string
 	Owner          string
 	ResourceType   string
@@ -32,10 +30,13 @@ func (s Store) ensureVersion(ctx context.Context, executor DBTX, value versionVa
 		}
 		return id, nil
 	}
-	id := versionID(value.DefinitionID, value.SchemaVersion, value.SchemaHash)
+	id, err := entityid.New("defver")
+	if err != nil {
+		return "", err
+	}
 	statement, args, err := query.NewInsertBuilder(s.dialect, VersionTableName).Columns(
-		"id", "definition_id", "installation_id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at",
-	).Values(id, value.DefinitionID, value.InstallationID, value.Owner, value.ResourceType, value.ResourceKey, value.SchemaVersion, value.SchemaHash, value.Payload, value.CreatedAt).OnConflictDoNothing("id").Build()
+		"version_id", "installation_id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at",
+	).Values(id, value.InstallationID, value.Owner, value.ResourceType, value.ResourceKey, value.SchemaVersion, value.SchemaHash, value.Payload, value.CreatedAt).OnConflictDoNothing("installation_id", "owner", "kind", "definition_key", "schema_version").Build()
 	if err != nil {
 		return "", err
 	}
@@ -58,7 +59,11 @@ func (s Store) ensureVersion(ctx context.Context, executor DBTX, value versionVa
 }
 
 func (s Store) versionByVersion(ctx context.Context, executor DBTX, value versionValue) (string, string, bool, error) {
-	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).Columns("id", "schema_hash").Where(query.And(query.Equal("definition_id", strings.TrimSpace(value.DefinitionID)), query.Equal("schema_version", strings.TrimSpace(value.SchemaVersion)))).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).Columns("version_id", "schema_hash").Where(query.And(
+		query.Equal("installation_id", strings.TrimSpace(value.InstallationID)), query.Equal("owner", strings.TrimSpace(value.Owner)),
+		query.Equal("kind", strings.TrimSpace(value.ResourceType)), query.Equal("definition_key", strings.TrimSpace(value.ResourceKey)),
+		query.Equal("schema_version", strings.TrimSpace(value.SchemaVersion)),
+	)).Build()
 	if err != nil {
 		return "", "", false, err
 	}
@@ -71,11 +76,6 @@ func (s Store) versionByVersion(ctx context.Context, executor DBTX, value versio
 		return "", "", false, err
 	}
 	return strings.TrimSpace(id), strings.TrimSpace(hash), true, nil
-}
-
-func versionID(definitionID, schemaVersion, schemaHash string) string {
-	sum := sha256.Sum256([]byte(strings.TrimSpace(definitionID) + "\x00" + strings.TrimSpace(schemaVersion) + "\x00" + strings.TrimSpace(schemaHash)))
-	return "definition-version:" + hex.EncodeToString(sum[:16])
 }
 
 func versionConflict() error {

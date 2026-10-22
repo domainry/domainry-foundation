@@ -13,12 +13,12 @@ func TestCleanupServiceTransitionsBeforeIdempotentBlobDeletion(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	store := newCleanupTestStore()
 	store.values[cleanupTestKey("workspace", "elapsed")] = Artifact{
-		ID: "elapsed", WorkspaceID: "workspace", Owner: OwnerAudit, Kind: "export",
+		ArtifactID: "elapsed", WorkspaceID: "workspace", Owner: OwnerAudit, Kind: "export",
 		StorageReference: "elapsed.bin", Status: StatusAvailable, ScanStatus: ScanNotRequired,
 		ExpiresAt: now.Add(-time.Second), CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 	}
 	store.values[cleanupTestKey("workspace", "future")] = Artifact{
-		ID: "future", WorkspaceID: "workspace", Owner: OwnerAudit, Kind: "export",
+		ArtifactID: "future", WorkspaceID: "workspace", Owner: OwnerAudit, Kind: "export",
 		StorageReference: "future.bin", Status: StatusAvailable, ScanStatus: ScanNotRequired,
 		ExpiresAt: now.Add(time.Hour), CreatedAt: now, UpdatedAt: now,
 	}
@@ -51,7 +51,7 @@ func TestCleanupServiceRetriesDeleteFromTerminalState(t *testing.T) {
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	store := newCleanupTestStore()
 	store.values[cleanupTestKey("workspace", "rejected")] = Artifact{
-		ID: "rejected", WorkspaceID: "workspace", Owner: OwnerAudit, Kind: "export",
+		ArtifactID: "rejected", WorkspaceID: "workspace", Owner: OwnerAudit, Kind: "export",
 		StorageReference: "rejected.bin", Status: StatusRejected, ScanStatus: ScanRejected,
 		CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
 	}
@@ -93,6 +93,9 @@ func (*cleanupTestStore) Register(context.Context, Artifact) (Artifact, bool, er
 func (s *cleanupTestStore) ByID(_ context.Context, workspaceID, id string) (Artifact, bool, error) {
 	value, found := s.values[cleanupTestKey(workspaceID, id)]
 	return value, found, nil
+}
+func (*cleanupTestStore) ByIdempotency(context.Context, string, string, string, string) (Artifact, bool, error) {
+	panic("unexpected ByIdempotency")
 }
 func (*cleanupTestStore) ByDownloadTokenHash(context.Context, string, string) (Artifact, bool, error) {
 	panic("unexpected ByDownloadTokenHash")

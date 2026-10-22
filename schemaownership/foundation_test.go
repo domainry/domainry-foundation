@@ -23,11 +23,11 @@ func TestFoundationPublishedMySQLMigrationChecksumsAreStable(t *testing.T) {
 		migrations func(string, string) ([]ormmigration.Migration, error)
 		checksum   string
 	}{
-		{"definitions", definition.SchemaMigrations, "07619f55458e53eae36a5bab0038055aa67cc4733c01d6aa2a40cd06a4710dbd"},
-		{"operations", operation.SchemaMigrations, "3c1eb8eb6c80d29949673c4d518ca160f970c22d318e03b7bc3f71147eae9c92"},
-		{"artifacts", artifact.SchemaMigrations, "aed0929c21fe9f1f9752da85e41e884b84cfb04d7ac0b5f8f68fe6f1260c293e"},
-		{"subject lifecycle", subjectlifecycle.SchemaMigrations, "d2a98befee7399dbd945519384f2af735802a7979835e3627b4cd223481522b6"},
-		{"worker scopes", workerscope.SchemaMigrations, "f4e1e7b2e94bfb21392e617afdb17a398e30cb7339a1be19493a43ce041cdb30"},
+		{"definitions", definition.SchemaMigrations, "2a26d67a67e7f5c0c44b925681e4035364389c5def5d71507eb9f43cc9e77150"},
+		{"operations", operation.SchemaMigrations, "56fab0a2fc02b0041dd7481757723364b6560e681089db074de603ab22f1753b"},
+		{"artifacts", artifact.SchemaMigrations, "6e24a01adba5f13ad443ceb49580f67c1eb754b80385609de6e9bda0fc818a8c"},
+		{"subject lifecycle", subjectlifecycle.SchemaMigrations, "ab13c34501fa82f0da9bbf3e3018ecb36365291647650b4d0d136d67d67b3f7c"},
+		{"worker scopes", workerscope.SchemaMigrations, "8d23a9cfab318318befcf1eb32313ca9ad82c5efb14a614aacd084dfd072e140"},
 	}
 	for _, source := range sources {
 		t.Run(source.name, func(t *testing.T) {
@@ -83,6 +83,11 @@ func TestEveryFoundationTableHasOneValidOwnershipContract(t *testing.T) {
 			if err := schemaownership.ValidateAll(group.tables); err != nil {
 				t.Fatal(err)
 			}
+			for _, table := range group.tables {
+				if !slices.Equal(table.PrimaryKey, []string{"id"}) {
+					t.Fatalf("Foundation table %s physical primary key=%v want [id]", table.Name, table.PrimaryKey)
+				}
+			}
 			if names := schemaownership.Names(group.tables); !slices.Equal(names, group.owned) {
 				t.Fatalf("ownership names=%v owned tables=%v", names, group.owned)
 			}
@@ -130,6 +135,9 @@ func TestFoundationOwnershipIdentityKeysMatchCanonicalDDL(t *testing.T) {
 				if create == "" {
 					t.Fatalf("%s has no canonical CREATE TABLE statement", table.Name)
 				}
+				if !strings.Contains(create, `"id" INTEGER PRIMARY KEY AUTOINCREMENT`) {
+					t.Fatalf("%s has no SQLite BIGINT physical auto-increment ID: %s", table.Name, create)
+				}
 				identity := table.IdentityKey()
 				quoted := make([]string, len(identity))
 				for index, column := range identity {
@@ -137,7 +145,8 @@ func TestFoundationOwnershipIdentityKeysMatchCanonicalDDL(t *testing.T) {
 				}
 				if len(table.PrimaryKey) > 0 {
 					primaryKey := "PRIMARY KEY (" + strings.Join(quoted, ", ") + ")"
-					if !strings.Contains(create, primaryKey) {
+					inlineAutoPrimaryKey := len(table.PrimaryKey) == 1 && strings.Contains(create, `"`+table.PrimaryKey[0]+`" INTEGER PRIMARY KEY AUTOINCREMENT`)
+					if !strings.Contains(create, primaryKey) && !inlineAutoPrimaryKey {
 						t.Fatalf("%s declares primary key %v but DDL is %s", table.Name, table.PrimaryKey, create)
 					}
 					continue

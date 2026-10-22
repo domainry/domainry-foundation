@@ -15,13 +15,14 @@ import (
 // Business modules translate their domain models at this boundary; Foundation
 // remains the only package that builds SQL against the shared table.
 type Record struct {
-	ID                 string
+	ID                 int64
+	OperationID        string
 	WorkspaceID        string
 	SystemPurpose      string
 	Owner              string
 	Kind               string
 	ActionKey          string
-	ParentID           string
+	ParentOperationID  string
 	ResourceType       string
 	ResourceID         string
 	IdempotencyKey     string
@@ -53,7 +54,7 @@ type RecordFilter struct {
 	AllScopes              bool
 	WorkspaceID            string
 	SystemPurpose          string
-	ID                     string
+	OperationID            string
 	Owner                  string
 	Kind                   string
 	ActionKey              string
@@ -63,7 +64,7 @@ type RecordFilter struct {
 	Status                 string
 	Statuses               []string
 	FailureClass           string
-	ParentID               string
+	ParentOperationID      string
 	ResourceType           string
 	ResourceID             string
 	RequestedBy            string
@@ -83,7 +84,7 @@ type RecordFilter struct {
 }
 
 type RecordChanges struct {
-	ID                    *string
+	OperationID           *string
 	RequestFingerprint    *string
 	RequestedBy           *string
 	Status                *string
@@ -166,7 +167,7 @@ func (s *SQLStore) InsertRecord(ctx context.Context, value Record) (bool, error)
 		builder = query.NewWorkspaceInsertBuilder(s.dialect, TableName, strings.TrimSpace(value.WorkspaceID)).
 			Columns(operationColumnsWithoutWorkspace()...).Values(recordValuesWithoutWorkspace(value)...)
 	} else {
-		builder = query.NewInsertBuilder(s.dialect, TableName).Columns(operationColumns...).Values(recordValues(value)...)
+		builder = query.NewInsertBuilder(s.dialect, TableName).Columns(operationColumns[1:]...).Values(recordValues(value)[1:]...)
 	}
 	statement, arguments, err := builder.Build()
 	if err != nil {
@@ -188,7 +189,7 @@ func (s *SQLStore) GetRecord(ctx context.Context, filter RecordFilter) (Record, 
 	if err != nil {
 		return Record{}, false, err
 	}
-	if strings.TrimSpace(filter.ID) == "" && (strings.TrimSpace(filter.Kind) == "" || strings.TrimSpace(filter.IdempotencyKey) == "") {
+	if strings.TrimSpace(filter.OperationID) == "" && (strings.TrimSpace(filter.Kind) == "" || strings.TrimSpace(filter.IdempotencyKey) == "") {
 		return Record{}, false, fmt.Errorf("operation record lookup requires id or kind and idempotency key")
 	}
 	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Columns(operationColumns...).Where(predicate).Limit(1).Build()
@@ -293,7 +294,7 @@ func (s *SQLStore) UpdateRecord(ctx context.Context, value Record, expectedStatu
 		return false, fmt.Errorf("operation record expected status is required")
 	}
 	predicate, err := recordPredicate(RecordFilter{
-		WorkspaceID: value.WorkspaceID, SystemPurpose: value.SystemPurpose, ID: value.ID,
+		WorkspaceID: value.WorkspaceID, SystemPurpose: value.SystemPurpose, OperationID: value.OperationID,
 		Owner: value.Owner, Kind: value.Kind, Status: expectedStatus,
 	})
 	if err != nil {
@@ -326,7 +327,7 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 	if err != nil {
 		return false, err
 	}
-	if strings.TrimSpace(filter.ID) == "" {
+	if strings.TrimSpace(filter.OperationID) == "" {
 		return false, fmt.Errorf("operation record patch requires id")
 	}
 	builder := recordUpdate(s, filter.WorkspaceID)
@@ -352,7 +353,7 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 		name  string
 		value *string
 	}{
-		{name: "id", value: changes.ID},
+		{name: "operation_id", value: changes.OperationID},
 		{name: "request fingerprint", value: changes.RequestFingerprint},
 		{name: "requested by", value: changes.RequestedBy},
 	} {
@@ -360,7 +361,7 @@ func (s *SQLStore) PatchRecord(ctx context.Context, filter RecordFilter, changes
 			return false, fmt.Errorf("operation record patch %s is required", required.name)
 		}
 	}
-	setString("id", changes.ID)
+	setString("operation_id", changes.OperationID)
 	setString("request_fingerprint", changes.RequestFingerprint)
 	setString("requested_by", changes.RequestedBy)
 	setString("status", changes.Status)
@@ -542,7 +543,7 @@ func (s *SQLStore) ListControls(ctx context.Context, purpose, kind string, limit
 }
 
 func (value Record) validate() error {
-	for _, field := range []string{value.ID, value.Owner, value.Kind, value.ActionKey, value.ResourceType, value.IdempotencyKey, value.Status, value.CreatedAt, value.UpdatedAt} {
+	for _, field := range []string{value.OperationID, value.Owner, value.Kind, value.ActionKey, value.ResourceType, value.IdempotencyKey, value.Status, value.CreatedAt, value.UpdatedAt} {
 		if strings.TrimSpace(field) == "" {
 			return fmt.Errorf("operation record required fields are missing")
 		}
@@ -586,7 +587,7 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 			predicate = and(predicate, query.Equal(column, value))
 		}
 	}
-	addExact("id", filter.ID)
+	addExact("operation_id", filter.OperationID)
 	addExact("owner", filter.Owner)
 	addExact("kind", filter.Kind)
 	addExact("action_key", filter.ActionKey)
@@ -595,7 +596,7 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 	addExact("reference", filter.Reference)
 	addExact("status", filter.Status)
 	addExact("failure_class", filter.FailureClass)
-	addExact("parent_id", filter.ParentID)
+	addExact("parent_operation_id", filter.ParentOperationID)
 	addExact("resource_type", filter.ResourceType)
 	addExact("resource_id", filter.ResourceID)
 	addExact("requested_by", filter.RequestedBy)
@@ -674,7 +675,7 @@ func recordPredicate(filter RecordFilter) (query.Predicate, error) {
 		predicate = and(predicate, query.LessThanOrEqual("created_at", millis))
 	}
 	if value := strings.ToLower(strings.TrimSpace(filter.Search)); value != "" {
-		columns := []string{"id", "owner", "kind", "parent_id", "resource_type", "resource_id", "requested_by", "reason", "correlation", "error_code", "next_action"}
+		columns := []string{"operation_id", "owner", "kind", "parent_operation_id", "resource_type", "resource_id", "requested_by", "reason", "correlation", "error_code", "next_action"}
 		terms := make([]query.Predicate, 0, len(columns))
 		for _, column := range columns {
 			terms = append(terms, query.LikeValue(query.Lower(query.Column(column)), "%"+value+"%"))
@@ -700,7 +701,7 @@ func recordUpdate(s *SQLStore, workspaceID string) *query.UpdateBuilder {
 
 func recordValues(value Record) []any {
 	return []any{
-		value.ID, value.WorkspaceID, value.SystemPurpose, value.Owner, value.Kind, value.ActionKey, value.ParentID, value.ResourceType, value.ResourceID,
+		value.ID, value.OperationID, value.WorkspaceID, value.SystemPurpose, value.Owner, value.Kind, value.ActionKey, value.ParentOperationID, value.ResourceType, value.ResourceID,
 		value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, value.Status, value.StatusURL,
 		string(value.ResultJSON), string(value.MetadataJSON), value.ErrorCode, value.FailureClass, value.NextAction, string(value.RelatedIDsJSON),
 		value.Correlation, string(value.EvidenceJSON), value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt), value.FencingToken, mustOperationTimestampMillis(value.ExpiresAt),
@@ -710,7 +711,7 @@ func recordValues(value Record) []any {
 
 func recordValuesWithoutWorkspace(value Record) []any {
 	values := recordValues(value)
-	return append(append([]any{}, values[:1]...), values[2:]...)
+	return append(append([]any{}, values[1:2]...), values[3:]...)
 }
 
 func scanRecord(scanner scanner) (Record, error) {
@@ -718,7 +719,7 @@ func scanRecord(scanner scanner) (Record, error) {
 	var resultJSON, metadataJSON, relatedIDsJSON, evidenceJSON string
 	var leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
 	err := scanner.Scan(
-		&value.ID, &value.WorkspaceID, &value.SystemPurpose, &value.Owner, &value.Kind, &value.ActionKey, &value.ParentID, &value.ResourceType, &value.ResourceID,
+		&value.ID, &value.OperationID, &value.WorkspaceID, &value.SystemPurpose, &value.Owner, &value.Kind, &value.ActionKey, &value.ParentOperationID, &value.ResourceType, &value.ResourceID,
 		&value.IdempotencyKey, &value.RequestFingerprint, &value.RequestedBy, &value.Reason, &value.Reference, &value.Status, &value.StatusURL,
 		&resultJSON, &metadataJSON, &value.ErrorCode, &value.FailureClass, &value.NextAction, &relatedIDsJSON, &value.Correlation, &evidenceJSON,
 		&value.LeaseOwner, &leaseExpiresAt, &value.FencingToken, &expiresAt, &createdAt, &startedAt, &finishedAt, &updatedAt,

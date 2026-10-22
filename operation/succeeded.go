@@ -21,7 +21,8 @@ type Execer interface {
 }
 
 type SucceededReceipt struct {
-	ID                 string
+	ID                 int64
+	OperationID        string
 	ResourceID         string
 	RequestFingerprint string
 	RequestedBy        string
@@ -32,7 +33,8 @@ type SucceededReceipt struct {
 }
 
 type SucceededRecord struct {
-	ID                 string
+	ID                 int64
+	OperationID        string
 	WorkspaceID        string
 	Owner              string
 	Kind               string
@@ -65,7 +67,7 @@ func LoadSucceededByID(ctx context.Context, queryer Queryer, renderer ormdialect
 }
 
 func loadSucceeded(ctx context.Context, queryer Queryer, renderer ormdialect.Renderer, workspaceID, owner, kind, idempotencyKey, id string, withReference bool) (SucceededReceipt, bool, error) {
-	columns := []string{"id", "resource_id", "request_fingerprint", "requested_by"}
+	columns := []string{"id", "operation_id", "resource_id", "request_fingerprint", "requested_by"}
 	if withReference {
 		columns = append(columns, "reference")
 	}
@@ -76,7 +78,7 @@ func loadSucceeded(ctx context.Context, queryer Queryer, renderer ormdialect.Ren
 		query.Equal("kind", strings.TrimSpace(kind)),
 	}
 	if strings.TrimSpace(id) != "" {
-		predicates = append(predicates, query.Equal("id", strings.TrimSpace(id)))
+		predicates = append(predicates, query.Equal("operation_id", strings.TrimSpace(id)))
 	} else {
 		predicates = append(predicates, query.Equal("idempotency_key", strings.TrimSpace(idempotencyKey)))
 	}
@@ -100,7 +102,7 @@ func UpdateSucceededResult(ctx context.Context, execer Execer, renderer ormdiale
 		Set("result_json", string(next)).Set("updated_at", updatedAtMillis).
 		Where(query.And(
 			query.Equal("system_purpose", ""), query.Equal("owner", strings.TrimSpace(owner)),
-			query.Equal("kind", strings.TrimSpace(kind)), query.Equal("id", strings.TrimSpace(id)),
+			query.Equal("kind", strings.TrimSpace(kind)), query.Equal("operation_id", strings.TrimSpace(id)),
 			query.Equal("status", StatusSucceeded), query.Equal("result_json", string(previous)),
 		)).Build()
 	if err != nil {
@@ -115,7 +117,7 @@ func UpdateSucceededResult(ctx context.Context, execer Execer, renderer ormdiale
 }
 
 func InsertSucceeded(ctx context.Context, execer Execer, renderer ormdialect.Renderer, value SucceededRecord) error {
-	for _, field := range []string{value.ID, value.WorkspaceID, value.Owner, value.Kind, value.ActionKey, value.ResourceType, value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.CompletedAt} {
+	for _, field := range []string{value.OperationID, value.WorkspaceID, value.Owner, value.Kind, value.ActionKey, value.ResourceType, value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.CompletedAt} {
 		if strings.TrimSpace(field) == "" {
 			return fmt.Errorf("shared operation receipt fields are required")
 		}
@@ -142,7 +144,7 @@ func InsertSucceeded(ctx context.Context, execer Execer, renderer ormdialect.Ren
 	statement, arguments, err := query.NewWorkspaceInsertBuilder(renderer, TableName, strings.TrimSpace(value.WorkspaceID)).
 		Columns(operationColumnsWithoutWorkspace()...).
 		Values(operationRecordValues(
-			value.ID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
+			value.OperationID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
 			value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, StatusSucceeded, "",
 			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON), value.Correlation,
 			string(value.EvidenceJSON), "", int64(0), 0, int64(0), completedAt, completedAt, completedAt, completedAt,
@@ -160,9 +162,9 @@ func scanSucceededReceipt(row *sql.Row, withReference bool) (SucceededReceipt, b
 	var createdAt int64
 	var err error
 	if withReference {
-		err = row.Scan(&value.ID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &value.Reference, &raw, &createdAt, &value.Status)
+		err = row.Scan(&value.ID, &value.OperationID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &value.Reference, &raw, &createdAt, &value.Status)
 	} else {
-		err = row.Scan(&value.ID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &raw, &createdAt, &value.Status)
+		err = row.Scan(&value.ID, &value.OperationID, &value.ResourceID, &value.RequestFingerprint, &value.RequestedBy, &raw, &createdAt, &value.Status)
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return SucceededReceipt{}, false, nil
@@ -179,7 +181,7 @@ func scanSucceededReceipt(row *sql.Row, withReference bool) (SucceededReceipt, b
 }
 
 func operationColumnsWithoutWorkspace() []string {
-	return append(append([]string{}, operationColumns[:1]...), operationColumns[2:]...)
+	return append(append([]string{}, operationColumns[1:2]...), operationColumns[3:]...)
 }
 
 func operationRecordValues(values ...any) []any { return values }

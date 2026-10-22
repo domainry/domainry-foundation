@@ -13,7 +13,7 @@ import (
 )
 
 var operationColumns = []string{
-	"id", "workspace_id", "system_purpose", "owner", "kind", "action_key", "parent_id", "resource_type", "resource_id",
+	"id", "operation_id", "workspace_id", "system_purpose", "owner", "kind", "action_key", "parent_operation_id", "resource_type", "resource_id",
 	"idempotency_key", "request_fingerprint", "requested_by", "reason", "reference", "status", "status_url", "result_json", "metadata_json",
 	"error_code", "failure_class", "next_action", "related_ids_json", "correlation", "evidence_json", "lease_owner", "lease_expires_at",
 	"fencing_token", "expires_at", "created_at", "started_at", "finished_at", "updated_at",
@@ -49,13 +49,17 @@ func (s *SQLStore) Claim(ctx context.Context, command Command) (Receipt, bool, e
 	command = normalizedCommand(command)
 	now := command.CreatedAt.UTC().Format(time.RFC3339Nano)
 	value := ManagedOperation{Command: command, Status: StatusStarted, Metadata: json.RawMessage(`{}`), Result: json.RawMessage(`{}`), UpdatedAt: command.CreatedAt.UTC()}
-	statement, args, err := query.NewInsertBuilder(s.dialect, TableName).Columns(operationColumns...).Values(operationValues(value, now, "", "")...).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, TableName).Columns(operationColumns[1:]...).Values(operationValues(value, now, "", "")[1:]...).Build()
 	if err != nil {
 		return Receipt{}, false, err
 	}
 	executor := ExecutorFromContext(ctx, s.database)
 	if _, err := executor.ExecContext(ctx, statement, args...); err == nil {
-		return Receipt{Command: command, Status: StatusStarted, Result: json.RawMessage(`{}`)}, true, nil
+		stored, found, readErr := s.getByKey(ctx, command.Scope, command.Owner, command.Kind, command.IdempotencyKey)
+		if readErr != nil || !found {
+			return Receipt{}, false, readErr
+		}
+		return Receipt{Command: stored.Command, Status: StatusStarted, Result: json.RawMessage(`{}`)}, true, nil
 	} else if existing, found, readErr := s.getByKey(ctx, command.Scope, command.Owner, command.Kind, command.IdempotencyKey); readErr != nil {
 		return Receipt{}, false, readErr
 	} else if !found {
@@ -75,7 +79,7 @@ func (s *SQLStore) Complete(ctx context.Context, completion Completion) error {
 		return err
 	}
 	predicate := and(scopePredicate(completion.Scope),
-		query.Equal("id", strings.TrimSpace(completion.ID)), query.Equal("owner", strings.TrimSpace(completion.Owner)),
+		query.Equal("operation_id", strings.TrimSpace(completion.OperationID)), query.Equal("owner", strings.TrimSpace(completion.Owner)),
 		query.Equal("kind", strings.TrimSpace(completion.Kind)), query.Equal("idempotency_key", strings.TrimSpace(completion.IdempotencyKey)),
 		query.Equal("request_fingerprint", strings.TrimSpace(completion.RequestFingerprint)), query.Equal("status", StatusStarted),
 	)
@@ -108,7 +112,7 @@ func (s *SQLStore) Create(ctx context.Context, value ManagedOperation) error {
 		return err
 	}
 	value.Command = normalizedCommand(value.Command)
-	statement, args, err := query.NewInsertBuilder(s.dialect, TableName).Columns(operationColumns...).Values(operationValues(value, "", "", "")...).Build()
+	statement, args, err := query.NewInsertBuilder(s.dialect, TableName).Columns(operationColumns[1:]...).Values(operationValues(value, "", "", "")[1:]...).Build()
 	if err != nil {
 		return err
 	}
@@ -362,7 +366,7 @@ func (s *SQLStore) getByKey(ctx context.Context, scope Scope, owner, kind, key s
 }
 
 func normalizedCommand(value Command) Command {
-	value.ID, value.Owner, value.Kind, value.ActionKey = strings.TrimSpace(value.ID), strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind), strings.TrimSpace(value.ActionKey)
+	value.OperationID, value.Owner, value.Kind, value.ActionKey = strings.TrimSpace(value.OperationID), strings.TrimSpace(value.Owner), strings.TrimSpace(value.Kind), strings.TrimSpace(value.ActionKey)
 	value.Scope.WorkspaceID, value.Scope.SystemPurpose = strings.TrimSpace(value.Scope.WorkspaceID), strings.TrimSpace(value.Scope.SystemPurpose)
 	value.Scope.ResourceType, value.Scope.ResourceID = strings.TrimSpace(value.Scope.ResourceType), strings.TrimSpace(value.Scope.ResourceID)
 	value.IdempotencyKey, value.RequestFingerprint = strings.TrimSpace(value.IdempotencyKey), strings.TrimSpace(value.RequestFingerprint)
@@ -372,11 +376,11 @@ func normalizedCommand(value Command) Command {
 }
 
 func managedIdentity(value ManagedOperation) ManagedIdentity {
-	return ManagedIdentity{ID: value.Command.ID, Scope: value.Command.Scope, Owner: value.Command.Owner, Kind: value.Command.Kind}
+	return ManagedIdentity{OperationID: value.Command.OperationID, Scope: value.Command.Scope, Owner: value.Command.Owner, Kind: value.Command.Kind}
 }
 
 func identityPredicate(identity ManagedIdentity) query.Predicate {
-	return and(scopePredicate(identity.Scope), query.Equal("id", strings.TrimSpace(identity.ID)), query.Equal("owner", strings.TrimSpace(identity.Owner)), query.Equal("kind", strings.TrimSpace(identity.Kind)))
+	return and(scopePredicate(identity.Scope), query.Equal("operation_id", strings.TrimSpace(identity.OperationID)), query.Equal("owner", strings.TrimSpace(identity.Owner)), query.Equal("kind", strings.TrimSpace(identity.Kind)))
 }
 
 func scopePredicate(scope Scope) query.Predicate {
@@ -416,7 +420,7 @@ func operationValues(value ManagedOperation, startedAt, finishedAt, expiresAt st
 		startedAt = command.CreatedAt.UTC().Format(time.RFC3339Nano)
 	}
 	return []any{
-		command.ID, command.Scope.WorkspaceID, command.Scope.SystemPurpose, command.Owner, command.Kind, command.ActionKey, "", command.Scope.ResourceType, command.Scope.ResourceID,
+		command.ID, command.OperationID, command.Scope.WorkspaceID, command.Scope.SystemPurpose, command.Owner, command.Kind, command.ActionKey, "", command.Scope.ResourceType, command.Scope.ResourceID,
 		command.IdempotencyKey, command.RequestFingerprint, command.RequestedBy, command.Reason, command.Reference, value.Status, command.StatusURL,
 		string(value.Result), string(value.Metadata), value.ErrorCode, "", value.NextAction, `[]`, "", `[]`, value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt),
 		value.FencingToken, mustOperationTimestampMillis(expiresAt), command.CreatedAt.UTC().UnixMilli(), mustOperationTimestampMillis(startedAt), mustOperationTimestampMillis(finishedAt), value.UpdatedAt.UTC().UnixMilli(),
@@ -432,7 +436,7 @@ func scanOperation(row scanner) (ManagedOperation, error) {
 	var leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
 	command := &value.Command
 	err := row.Scan(
-		&command.ID, &workspaceID, &systemPurpose, &command.Owner, &command.Kind, &command.ActionKey, &parentID, &command.Scope.ResourceType, &command.Scope.ResourceID,
+		&command.ID, &command.OperationID, &workspaceID, &systemPurpose, &command.Owner, &command.Kind, &command.ActionKey, &parentID, &command.Scope.ResourceType, &command.Scope.ResourceID,
 		&command.IdempotencyKey, &command.RequestFingerprint, &command.RequestedBy, &command.Reason, &command.Reference, &status, &command.StatusURL,
 		&resultJSON, &metadataJSON, &value.ErrorCode, &failureClass, &nextAction, &relatedIDs, &correlation, &evidence, &value.LeaseOwner,
 		&leaseExpiresAt, &value.FencingToken, &expiresAt, &createdAt, &startedAt, &finishedAt, &updatedAt,

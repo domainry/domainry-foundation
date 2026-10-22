@@ -42,8 +42,8 @@ func SchemaMigrations(driver, schema string) ([]SchemaMigration, error) {
 }
 
 func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
-	catalog, _, err := ormschema.NewTable(renderer, TableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("installation_id", ormschema.TextKey(255)),
+	catalog, _, err := ormschema.NewTableWithRequiredColumns(renderer, TableName, physicalID()).IfNotExists().Columns(
+		installationIDColumn(),
 		required("owner", ormschema.TextKey(64)), required("kind", ormschema.TextKey(128)),
 		required("definition_key", ormschema.TextKey(255)), required("current_version_id", ormschema.TextKey(255)),
 		required("status", ormschema.TextKey(32)), required("object_key", ormschema.TextKey(255)),
@@ -57,13 +57,13 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", TableName, err)
 	}
-	versions, _, err := ormschema.NewTable(renderer, VersionTableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("definition_id", ormschema.TextKey(255)),
-		required("installation_id", ormschema.TextKey(255)), required("owner", ormschema.TextKey(64)),
+	versions, _, err := ormschema.NewTableWithRequiredColumns(renderer, VersionTableName, physicalID()).IfNotExists().Columns(
+		required("version_id", ormschema.TextKey(255)),
+		installationIDColumn(), required("owner", ormschema.TextKey(64)),
 		required("kind", ormschema.TextKey(128)), required("definition_key", ormschema.TextKey(255)),
 		required("schema_version", ormschema.TextKey(255)), required("schema_hash", ormschema.TextKey(255)),
 		required("payload_json", ormschema.LongText()), required("created_at", ormschema.BigInt()),
-	).PrimaryKey("id").Unique("definition_id", "schema_version").Build()
+	).PrimaryKey("id").Unique("version_id").Unique("installation_id", "owner", "kind", "definition_key", "schema_version").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", VersionTableName, err)
 	}
@@ -74,6 +74,16 @@ func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition
 	return ormschema.Column(name, kind).NotNull()
 }
 
+func physicalID() ormschema.ColumnDefinition {
+	return ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement()
+}
+
+func installationIDColumn() ormschema.ColumnDefinition {
+	// Single-byte installation identity keeps the complete version unique
+	// index within InnoDB's 3072-byte limit under utf8mb4.
+	return required("installation_id", ormschema.TextKey(255)).ASCIIKey()
+}
+
 func optional(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition {
 	return ormschema.Column(name, kind)
 }
@@ -81,15 +91,16 @@ func optional(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition
 func SchemaOwnership() []schemaownership.Table {
 	return []schemaownership.Table{
 		{
-			Name: TableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeInstallation,
+			Name: TableName, Owner: MigrationOwner, Kind: schemaownership.KindState, WorkspaceScope: schemaownership.ScopeInstallation,
 			RetentionClass: schemaownership.RetentionInstallation, PrimaryKey: []string{"id"},
 			BoundedQueryPath: "installation_id plus owner/kind/definition_key identity; registered owner/kind listing",
 			DeletionPolicy:   "source snapshot replacement deletes disabled current rows; active rows live for the source lifetime",
 		},
 		{
-			Name: VersionTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeInstallation,
+			Name: VersionTableName, Owner: MigrationOwner, Kind: schemaownership.KindEntity, WorkspaceScope: schemaownership.ScopeInstallation,
 			RetentionClass: schemaownership.RetentionInstallation, PrimaryKey: []string{"id"},
-			BoundedQueryPath: "definition_id plus schema_version identity; installation/owner/kind/definition_key history",
+			EntityIDColumn: "version_id", EntityIDPrefix: "defver", BusinessKey: []string{"version_id"},
+			BoundedQueryPath: "installation/owner/kind/definition_key plus schema_version identity; scoped version history",
 			DeletionPolicy:   "immutable version history is retained for the installation lifetime",
 		},
 	}

@@ -11,7 +11,7 @@ import (
 func TestCommandAndCompletionRequireClosedSharedLedgerIdentity(t *testing.T) {
 	now := time.Now().UTC()
 	command := Command{
-		ID: "operation-1", Scope: Scope{SystemPurpose: "scheduler_management", ResourceType: "scheduler_command", ResourceID: "daily"},
+		OperationID: "op_00000000000000000000000000000001", Scope: Scope{SystemPurpose: "scheduler_management", ResourceType: "scheduler_command", ResourceID: "daily"},
 		Owner: "scheduler", Kind: "management_command", ActionKey: "scheduler.run", IdempotencyKey: "runtime-a:key",
 		RequestFingerprint: "sha256", RequestedBy: "actor-a", Reason: "run schedule", StatusURL: "/scheduler/runs/1", CreatedAt: now,
 	}
@@ -23,8 +23,8 @@ func TestCommandAndCompletionRequireClosedSharedLedgerIdentity(t *testing.T) {
 		t.Fatal("command accepted two execution scopes")
 	}
 	completion := Completion{
-		ID:    "operation-1",
-		Scope: Scope{SystemPurpose: "scheduler_management"}, Owner: "scheduler", Kind: "management_command",
+		OperationID: "op_00000000000000000000000000000001",
+		Scope:       Scope{SystemPurpose: "scheduler_management"}, Owner: "scheduler", Kind: "management_command",
 		IdempotencyKey: "runtime-a:key", RequestFingerprint: "sha256", Result: json.RawMessage(`{"ok":true}`), CompletedAt: now,
 	}
 	if err := completion.Validate(); err != nil {
@@ -38,7 +38,7 @@ func TestCommandAndCompletionRequireClosedSharedLedgerIdentity(t *testing.T) {
 
 func TestRecordFilterValidatesExactJSONCAS(t *testing.T) {
 	filter := RecordFilter{
-		WorkspaceID: "workspace-a", ID: "operation-1",
+		WorkspaceID: "workspace-a", OperationID: "op_00000000000000000000000000000001",
 		ResultJSON: json.RawMessage(`{"payload":"frozen"}`), MetadataJSON: json.RawMessage(`{"caller":"hashed"}`),
 	}
 	if _, err := recordPredicate(filter); err != nil {

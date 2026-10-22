@@ -67,8 +67,7 @@ func SchemaMigrations(driver, schema string) ([]SchemaMigration, error) {
 }
 
 func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
-	table, _, err := ormschema.NewTable(renderer, TableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(191)),
+	table, _, err := ormschema.NewTableWithRequiredColumns(renderer, TableName, physicalID()).IfNotExists().Columns(
 		required("owner", ormschema.TextKey(191)),
 		required("scope_key", ormschema.TextKey(191)),
 		defaulted("cursor", ormschema.TextKey(255), ""),
@@ -96,13 +95,17 @@ func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition
 	return ormschema.Column(name, kind).NotNull()
 }
 
+func physicalID() ormschema.ColumnDefinition {
+	return ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement()
+}
+
 func defaulted(name string, kind ormschema.ColumnType, value any) ormschema.ColumnDefinition {
 	return ormschema.Column(name, kind).NotNull().DefaultValue(value)
 }
 
 func SchemaOwnership() []schemaownership.Table {
 	return []schemaownership.Table{{
-		Name: TableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeExplicitMixed,
+		Name: TableName, Owner: MigrationOwner, Kind: schemaownership.KindState, WorkspaceScope: schemaownership.ScopeExplicitMixed,
 		RetentionClass: schemaownership.RetentionRegisteredRowPolicy, PrimaryKey: []string{"id"},
 		BoundedQueryPath: "registered owner plus scope_key cursor; exact identity and owner-scoped lease queries",
 		DeletionPolicy:   "one row lives for each registered owner scope and is retired when that owner scope is removed",

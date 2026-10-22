@@ -65,7 +65,7 @@ func (s *CleanupService) Reconcile(ctx context.Context, owner, kind string, now 
 		if value.ExpiresAt.IsZero() || now.Before(value.ExpiresAt) {
 			continue
 		}
-		changed, err := s.artifacts.Transition(ctx, value.WorkspaceID, value.ID, StatusAvailable, StatusExpired, value.ScanStatus, now)
+		changed, err := s.artifacts.Transition(ctx, value.WorkspaceID, value.ArtifactID, StatusAvailable, StatusExpired, value.ScanStatus, now)
 		if err != nil {
 			return result, err
 		}
@@ -88,7 +88,7 @@ func (s *CleanupService) Reconcile(ctx context.Context, owner, kind string, now 
 		if err := s.content.Delete(ctx, value.WorkspaceID, value.StorageReference); err != nil && !errors.Is(err, ErrContentNotFound) {
 			return result, err
 		}
-		changed, err := s.artifacts.Transition(ctx, value.WorkspaceID, value.ID, value.Status, StatusDeleted, value.ScanStatus, now)
+		changed, err := s.artifacts.Transition(ctx, value.WorkspaceID, value.ArtifactID, value.Status, StatusDeleted, value.ScanStatus, now)
 		if err != nil {
 			return result, err
 		}
@@ -96,12 +96,12 @@ func (s *CleanupService) Reconcile(ctx context.Context, owner, kind string, now 
 			result.Deleted++
 			continue
 		}
-		current, found, err := s.artifacts.ByID(ctx, value.WorkspaceID, value.ID)
+		current, found, err := s.artifacts.ByID(ctx, value.WorkspaceID, value.ArtifactID)
 		if err != nil {
 			return result, err
 		}
 		if found && current.Status != StatusDeleted {
-			return result, fmt.Errorf("artifact %q changed while deleting terminal content", value.ID)
+			return result, fmt.Errorf("artifact %q changed while deleting terminal content", value.ArtifactID)
 		}
 	}
 	return result, nil

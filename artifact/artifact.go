@@ -76,7 +76,8 @@ const (
 // Artifact is metadata for immutable binary content. StorageReference points
 // to deployment-owned content; database rows never contain the bytes.
 type Artifact struct {
-	ID                       string          `json:"id"`
+	ID                       int64           `json:"id"`
+	ArtifactID               string          `json:"artifact_id"`
 	WorkspaceID              string          `json:"workspace_id"`
 	Owner                    string          `json:"owner"`
 	Kind                     string          `json:"kind"`
@@ -101,7 +102,6 @@ type Artifact struct {
 // Binding associates an artifact with a durable owner resource without
 // copying content or authorization metadata.
 type Binding struct {
-	ID           string          `json:"id"`
 	WorkspaceID  string          `json:"workspace_id"`
 	ArtifactID   string          `json:"artifact_id"`
 	Owner        string          `json:"owner"`
@@ -158,6 +158,7 @@ func BindingKindRegistered(kind string) bool { return bindingKinds[strings.TrimS
 type Store interface {
 	Register(context.Context, Artifact) (Artifact, bool, error)
 	ByID(context.Context, string, string) (Artifact, bool, error)
+	ByIdempotency(context.Context, string, string, string, string) (Artifact, bool, error)
 	ByDownloadTokenHash(context.Context, string, string) (Artifact, bool, error)
 	Transition(context.Context, string, string, Status, Status, ScanStatus, time.Time) (bool, error)
 	Bind(context.Context, Binding) (Binding, bool, error)
@@ -201,7 +202,7 @@ type Lister interface {
 // and owner metadata. Content identity and storage reference remain immutable.
 type Mutation struct {
 	WorkspaceID        string
-	ID                 string
+	ArtifactID         string
 	Owner              string
 	Kind               string
 	ExpectedStatus     Status

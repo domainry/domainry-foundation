@@ -1,8 +1,6 @@
 package workerscope
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
@@ -43,28 +41,22 @@ func RegistrationFor(owner string) (Registration, bool) {
 }
 
 type Identity struct {
-	ID       string
 	Owner    string
 	ScopeKey string
 }
 
 func NewIdentity(owner, scopeKey string) Identity {
-	owner, scopeKey = strings.TrimSpace(owner), strings.TrimSpace(scopeKey)
-	digest := sha256.Sum256([]byte(owner + "\x00" + scopeKey))
-	return Identity{ID: "worker_scope:" + hex.EncodeToString(digest[:12]), Owner: owner, ScopeKey: scopeKey}
+	return Identity{Owner: strings.TrimSpace(owner), ScopeKey: strings.TrimSpace(scopeKey)}
 }
 
 func (v Identity) normalized() Identity {
-	v.ID, v.Owner, v.ScopeKey = strings.TrimSpace(v.ID), strings.TrimSpace(v.Owner), strings.TrimSpace(v.ScopeKey)
-	if v.ID == "" && v.Owner != "" && v.ScopeKey != "" {
-		v.ID = NewIdentity(v.Owner, v.ScopeKey).ID
-	}
+	v.Owner, v.ScopeKey = strings.TrimSpace(v.Owner), strings.TrimSpace(v.ScopeKey)
 	return v
 }
 
 func (v Identity) validate() error {
 	v = v.normalized()
-	if v.ID == "" || v.Owner == "" || v.ScopeKey == "" {
+	if v.Owner == "" || v.ScopeKey == "" {
 		return fmt.Errorf("worker scope identity is required")
 	}
 	if _, found := RegistrationFor(v.Owner); !found {

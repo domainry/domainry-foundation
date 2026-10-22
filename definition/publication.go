@@ -57,9 +57,8 @@ func (s Store) Publish(ctx context.Context, command PublishCommand) (PublishResu
 
 func (s Store) publish(ctx context.Context, executor DBTX, command PublishCommand) (PublishResult, error) {
 	now := time.Now().UTC().UnixMilli()
-	definitionID := s.definitionID(command.Owner, command.ResourceType, command.ResourceKey)
 	versionID, err := s.ensureVersion(ctx, executor, versionValue{
-		DefinitionID: definitionID, InstallationID: s.installationID, Owner: command.Owner,
+		InstallationID: s.installationID, Owner: command.Owner,
 		ResourceType: command.ResourceType, ResourceKey: command.ResourceKey,
 		SchemaVersion: command.SchemaVersion, SchemaHash: command.SchemaHash,
 		Payload: append(json.RawMessage(nil), command.Payload...), CreatedAt: now,
@@ -82,13 +81,13 @@ func (s Store) publish(ctx context.Context, executor DBTX, command PublishComman
 	var affected int64
 	if command.ExpectedCurrentVersionID == NoCurrentVersion {
 		statement, args, buildErr := query.NewInsertBuilder(s.dialect, TableName).Columns(
-			"id", "installation_id", "owner", "kind", "definition_key", "current_version_id", "status", "object_key", "name",
+			"installation_id", "owner", "kind", "definition_key", "current_version_id", "status", "object_key", "name",
 			"payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "published_at", "published_by", "disabled_at", "disabled_by", "created_at", "updated_at",
 		).Values(
-			definitionID, s.installationID, command.Owner, command.ResourceType, command.ResourceKey, versionID, "active",
+			s.installationID, command.Owner, command.ResourceType, command.ResourceKey, versionID, "active",
 			strings.TrimSpace(command.ObjectKey), strings.TrimSpace(command.Name), command.Payload, command.SchemaVersion, command.SchemaHash,
 			command.SourceKind, command.SourceID, now, command.PublishedBy, nil, nil, now, now,
-		).OnConflictDoNothing("id").Build()
+		).OnConflictDoNothing("installation_id", "owner", "kind", "definition_key").Build()
 		if buildErr != nil {
 			return PublishResult{}, buildErr
 		}
@@ -105,7 +104,7 @@ func (s Store) publish(ctx context.Context, executor DBTX, command PublishComman
 			Set("source_kind", command.SourceKind).Set("source_id", command.SourceID).
 			Set("published_at", now).Set("published_by", command.PublishedBy).Set("disabled_at", nil).Set("disabled_by", nil).Set("updated_at", now).
 			Where(query.And(
-				query.Equal("id", definitionID), query.Equal("installation_id", s.installationID),
+				query.Equal("installation_id", s.installationID),
 				query.Equal("owner", command.Owner), query.Equal("kind", command.ResourceType),
 				query.Equal("definition_key", command.ResourceKey), query.Equal("current_version_id", command.ExpectedCurrentVersionID), query.Equal("status", "active"),
 			)).Build()
@@ -204,18 +203,18 @@ func (s Store) GetVersion(ctx context.Context, value VersionQuery) (Version, boo
 	}
 	predicates := []query.Predicate{query.Equal("installation_id", s.installationID), query.Equal("owner", owner), query.Equal("kind", kind), query.Equal("definition_key", key)}
 	if versionID != "" {
-		predicates = append(predicates, query.Equal("id", versionID))
+		predicates = append(predicates, query.Equal("version_id", versionID))
 	} else {
 		predicates = append(predicates, query.Equal("schema_version", schemaVersion))
 	}
-	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).Columns("id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at").Where(query.And(predicates...)).Build()
+	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).Columns("id", "version_id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at").Where(query.And(predicates...)).Build()
 	if err != nil {
 		return Version{}, false, err
 	}
 	var result Version
 	var payload string
 	var createdAt int64
-	err = ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, args...).Scan(&result.ID, &result.Owner, &result.ResourceType, &result.ResourceKey, &result.SchemaVersion, &result.SchemaHash, &payload, &createdAt)
+	err = ExecutorFromContext(ctx, s.database).QueryRowContext(ctx, statement, args...).Scan(&result.ID, &result.VersionID, &result.Owner, &result.ResourceType, &result.ResourceKey, &result.SchemaVersion, &result.SchemaHash, &payload, &createdAt)
 	if err == sql.ErrNoRows {
 		return Version{}, false, nil
 	}
@@ -240,7 +239,7 @@ func (s Store) ListVersions(ctx context.Context, value VersionListQuery) ([]Vers
 		return nil, &Error{Kind: KindBadRequest, Code: "metadata.definition_version_query_invalid"}
 	}
 	statement, args, err := query.NewSelectBuilder(s.dialect, VersionTableName).
-		Columns("id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at").
+		Columns("id", "version_id", "owner", "kind", "definition_key", "schema_version", "schema_hash", "payload_json", "created_at").
 		Where(query.And(
 			query.Equal("installation_id", s.installationID), query.Equal("owner", owner),
 			query.Equal("kind", kind), query.Equal("definition_key", key),
@@ -259,7 +258,7 @@ func (s Store) ListVersions(ctx context.Context, value VersionListQuery) ([]Vers
 		var value Version
 		var payload string
 		var createdAt int64
-		if err := rows.Scan(&value.ID, &value.Owner, &value.ResourceType, &value.ResourceKey, &value.SchemaVersion, &value.SchemaHash, &payload, &createdAt); err != nil {
+		if err := rows.Scan(&value.ID, &value.VersionID, &value.Owner, &value.ResourceType, &value.ResourceKey, &value.SchemaVersion, &value.SchemaHash, &payload, &createdAt); err != nil {
 			return nil, err
 		}
 		value.Payload = json.RawMessage(payload)

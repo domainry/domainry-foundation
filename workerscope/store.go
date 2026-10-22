@@ -12,7 +12,7 @@ import (
 )
 
 var scopeColumns = []string{
-	"id", "owner", "scope_key", "cursor", "checkpoint", "capacity", "lease_owner", "lease_expires_at",
+	"owner", "scope_key", "cursor", "checkpoint", "capacity", "lease_owner", "lease_expires_at",
 	"fencing_token", "last_started_at", "last_completed_at", "last_error", "updated_at",
 }
 
@@ -74,7 +74,7 @@ func (s *Store) Register(ctx context.Context, executor Executor, identity Identi
 		return nil
 	}
 	insert, insertArgs, err := query.NewInsertBuilder(s.dialect, TableName).
-		Columns("id", "owner", "scope_key", "last_error", "updated_at").Values(identity.ID, identity.Owner, identity.ScopeKey, "", now).Build()
+		Columns("owner", "scope_key", "last_error", "updated_at").Values(identity.Owner, identity.ScopeKey, "", now).Build()
 	if err != nil {
 		return fmt.Errorf("build worker scope registration: %w", err)
 	}
@@ -120,8 +120,8 @@ func (s *Store) LockCapacity(ctx context.Context, executor DBTX, identity Identi
 		return nil
 	}
 	insert, insertArgs, err := query.NewInsertBuilder(s.dialect, TableName).
-		Columns("id", "owner", "scope_key", "checkpoint", "last_error", "updated_at").
-		Values(identity.ID, identity.Owner, identity.ScopeKey, int64(1), "", now).Build()
+		Columns("owner", "scope_key", "checkpoint", "last_error", "updated_at").
+		Values(identity.Owner, identity.ScopeKey, int64(1), "", now).Build()
 	if err != nil {
 		return err
 	}
@@ -348,7 +348,7 @@ func (s *Store) ActiveLeaseGuard(identity Identity, leaseOwner string, fencingTo
 	if strings.TrimSpace(leaseOwner) == "" || fencingToken < 1 || now.IsZero() {
 		return nil, fmt.Errorf("worker scope active lease guard is invalid")
 	}
-	return query.NewSelectBuilder(s.dialect, TableName).Columns("id").Where(query.And(
+	return query.NewSelectBuilder(s.dialect, TableName).Columns("scope_key").Where(query.And(
 		leasePredicate(identity, leaseOwner, fencingToken), query.GreaterThan("lease_expires_at", timestamp(now)),
 	)), nil
 }
@@ -391,7 +391,7 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 	}
 	release.Identity = release.Identity.normalized()
 	release.ExpectedLeaseOwner = strings.TrimSpace(release.ExpectedLeaseOwner)
-	if release.Identity.ID == "" || release.Identity.Owner == "" || release.ExpectedLeaseOwner == "" || release.ExpectedFencingToken < 1 || release.Now.IsZero() {
+	if release.Identity.Owner == "" || release.Identity.ScopeKey == "" || release.ExpectedLeaseOwner == "" || release.ExpectedFencingToken < 1 || release.Now.IsZero() {
 		return LeaseReleaseResult{}, false, fmt.Errorf("worker scope lease release is invalid")
 	}
 	if _, found := RegistrationFor(release.Identity.Owner); !found {
@@ -445,15 +445,11 @@ func (s *Store) ForceReleaseLease(ctx context.Context, executor DBTX, release Le
 }
 
 func identityPredicate(identity Identity) query.Predicate {
-	return query.And(query.Equal("id", identity.ID), query.Equal("owner", identity.Owner), query.Equal("scope_key", identity.ScopeKey))
+	return query.And(query.Equal("owner", identity.Owner), query.Equal("scope_key", identity.ScopeKey))
 }
 
 func releaseIdentityPredicate(identity Identity) query.Predicate {
-	predicate := query.Predicate(query.And(query.Equal("id", identity.ID), query.Equal("owner", identity.Owner)))
-	if identity.ScopeKey != "" {
-		predicate = query.And(predicate, query.Equal("scope_key", identity.ScopeKey))
-	}
-	return predicate
+	return identityPredicate(identity)
 }
 
 func leasePredicate(identity Identity, owner string, fencingToken int64) query.Predicate {
@@ -478,7 +474,7 @@ func scanScope(row interface{ Scan(...any) error }) (Scope, error) {
 	var value Scope
 	var leaseExpiresAt, lastStartedAt, lastCompletedAt, updatedAt int64
 	err := row.Scan(
-		&value.ID, &value.Owner, &value.ScopeKey, &value.Cursor, &value.Checkpoint, &value.Capacity,
+		&value.Owner, &value.ScopeKey, &value.Cursor, &value.Checkpoint, &value.Capacity,
 		&value.LeaseOwner, &leaseExpiresAt, &value.FencingToken, &lastStartedAt,
 		&lastCompletedAt, &value.LastError, &updatedAt,
 	)

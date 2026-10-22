@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/domainry/domainry-foundation/entityid"
 )
 
 const (
@@ -27,7 +29,8 @@ type Scope struct {
 }
 
 type Command struct {
-	ID                 string
+	ID                 int64
+	OperationID        string
 	Scope              Scope
 	Owner              string
 	Kind               string
@@ -42,7 +45,7 @@ type Command struct {
 }
 
 func (c Command) Validate() error {
-	if strings.TrimSpace(c.ID) == "" || strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.ActionKey) == "" {
+	if entityid.Validate("op", c.OperationID) != nil || strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.ActionKey) == "" {
 		return fmt.Errorf("operation command identity is required")
 	}
 	if strings.TrimSpace(c.IdempotencyKey) == "" || strings.TrimSpace(c.RequestFingerprint) == "" {
@@ -71,7 +74,7 @@ type Receipt struct {
 }
 
 type Completion struct {
-	ID                 string
+	OperationID        string
 	Scope              Scope
 	Owner              string
 	Kind               string
@@ -82,7 +85,7 @@ type Completion struct {
 }
 
 func (c Completion) Validate() error {
-	if strings.TrimSpace(c.ID) == "" || strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.IdempotencyKey) == "" || strings.TrimSpace(c.RequestFingerprint) == "" {
+	if entityid.Validate("op", c.OperationID) != nil || strings.TrimSpace(c.Owner) == "" || strings.TrimSpace(c.Kind) == "" || strings.TrimSpace(c.IdempotencyKey) == "" || strings.TrimSpace(c.RequestFingerprint) == "" {
 		return fmt.Errorf("operation completion identity is required")
 	}
 	workspace, system := strings.TrimSpace(c.Scope.WorkspaceID) != "", strings.TrimSpace(c.Scope.SystemPurpose) != ""

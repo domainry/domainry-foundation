@@ -150,9 +150,8 @@ func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, sch
 		if found && current.SchemaVersion == schemaVersion && current.SchemaHash != hash {
 			return versionConflict()
 		}
-		definitionID := s.definitionID(owner, kind, key)
 		versionID, err := s.ensureVersion(ctx, executor, versionValue{
-			DefinitionID: definitionID, InstallationID: s.installationID, Owner: owner,
+			InstallationID: s.installationID, Owner: owner,
 			ResourceType: kind, ResourceKey: key, SchemaVersion: schemaVersion,
 			SchemaHash: hash, Payload: append(json.RawMessage(nil), value.Payload...), CreatedAt: now,
 		})
@@ -167,7 +166,10 @@ func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, sch
 				Set("payload_json", value.Payload).Set("schema_version", schemaVersion).Set("schema_hash", hash).
 				Set("source_kind", sourceKind).Set("source_id", sourceID).
 				Set("published_at", now).Set("published_by", publishedBy).Set("disabled_at", nil).Set("disabled_by", nil).Set("updated_at", now).
-				Where(query.Equal("id", definitionID)).Build()
+				Where(query.And(
+					query.Equal("installation_id", s.installationID), query.Equal("owner", owner),
+					query.Equal("kind", kind), query.Equal("definition_key", key),
+				)).Build()
 			if buildErr != nil {
 				return buildErr
 			}
@@ -177,10 +179,10 @@ func (s Store) syncDefinitionRows(ctx context.Context, executor DBTX, owner, sch
 			continue
 		}
 		statement, values, buildErr := query.NewInsertBuilder(s.dialect, TableName).Columns(
-			"id", "installation_id", "owner", "kind", "definition_key", "current_version_id", "status", "object_key", "name",
+			"installation_id", "owner", "kind", "definition_key", "current_version_id", "status", "object_key", "name",
 			"payload_json", "schema_version", "schema_hash", "source_kind", "source_id", "published_at", "published_by", "disabled_at", "disabled_by", "created_at", "updated_at",
 		).Values(
-			definitionID, s.installationID, owner, kind, key, versionID, "active", strings.TrimSpace(value.ObjectKey), strings.TrimSpace(value.Name),
+			s.installationID, owner, kind, key, versionID, "active", strings.TrimSpace(value.ObjectKey), strings.TrimSpace(value.Name),
 			value.Payload, schemaVersion, hash, sourceKind, sourceID, now, publishedBy, nil, nil, now, now,
 		).Build()
 		if buildErr != nil {
@@ -286,11 +288,6 @@ func (s Store) get(ctx context.Context, executor DBTX, owner, resourceType, key 
 	}
 	value, err := scanDefinition(rows)
 	return value, err == nil, err
-}
-
-func (s Store) definitionID(owner, resourceType, key string) string {
-	sum := sha256.Sum256([]byte(s.installationID + "\x00" + owner + "\x00" + resourceType + "\x00" + key))
-	return "definition:" + hex.EncodeToString(sum[:16])
 }
 
 type rowScanner interface{ Scan(...any) error }

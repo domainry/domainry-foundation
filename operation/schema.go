@@ -94,10 +94,10 @@ func SchemaMigrations(driver, schema string) ([]SchemaMigration, error) {
 }
 
 func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
-	operations, _, err := ormschema.NewTable(renderer, TableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), defaulted("system_purpose", ormschema.TextKey(compositeKeyLength), ""),
+	operations, _, err := ormschema.NewTableWithRequiredColumns(renderer, TableName, physicalID()).IfNotExists().Columns(
+		required("operation_id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), defaulted("system_purpose", ormschema.TextKey(compositeKeyLength), ""),
 		required("owner", ormschema.TextKey(compositeKeyLength)), required("kind", ormschema.TextKey(compositeKeyLength)), required("action_key", ormschema.TextKey(255)),
-		defaulted("parent_id", ormschema.TextKey(255), ""), required("resource_type", ormschema.TextKey(255)), defaulted("resource_id", ormschema.TextKey(255), ""),
+		defaulted("parent_operation_id", ormschema.TextKey(255), ""), required("resource_type", ormschema.TextKey(255)), defaulted("resource_id", ormschema.TextKey(255), ""),
 		required("idempotency_key", ormschema.TextKey(compositeKeyLength)), required("request_fingerprint", ormschema.TextKey(255)), required("requested_by", ormschema.TextKey(255)),
 		required("reason", ormschema.LongText()), defaulted("reference", ormschema.TextKey(255), ""), required("status", ormschema.TextKey(statusKeyLength)),
 		required("status_url", ormschema.LongText()), required("result_json", ormschema.LongText()), required("metadata_json", ormschema.LongText()),
@@ -106,26 +106,26 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		defaulted("lease_owner", ormschema.TextKey(255), ""), defaulted("lease_expires_at", ormschema.BigInt(), 0), defaulted("fencing_token", ormschema.BigInt(), 0),
 		defaulted("expires_at", ormschema.BigInt(), 0), required("created_at", ormschema.BigInt()), defaulted("started_at", ormschema.BigInt(), 0),
 		defaulted("finished_at", ormschema.BigInt(), 0), required("updated_at", ormschema.BigInt()),
-	).PrimaryKey("id").Build()
+	).PrimaryKey("id").Unique("operation_id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", TableName, err)
 	}
-	controls, _, err := ormschema.NewTable(renderer, ControlTableName).IfNotExists().Columns(
+	controls, _, err := ormschema.NewTableWithRequiredColumns(renderer, ControlTableName, physicalID()).IfNotExists().Columns(
 		required("system_purpose", ormschema.TextKey(255)), required("control_kind", ormschema.TextKey(255)), required("owner", ormschema.TextKey(255)),
 		required("state", ormschema.TextKey(191)), required("reason", ormschema.Text()), required("reference", ormschema.Text()),
 		required("updated_by", ormschema.Text()), required("revision", ormschema.BigInt()), required("updated_at", ormschema.BigInt()),
-	).Build()
+	).PrimaryKey("id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", ControlTableName, err)
 	}
-	breakGlass, _, err := ormschema.NewTable(renderer, BreakGlassTableName).IfNotExists().Columns(
-		required("id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), required("state", ormschema.TextKey(191)),
+	breakGlass, _, err := ormschema.NewTableWithRequiredColumns(renderer, BreakGlassTableName, physicalID()).IfNotExists().Columns(
+		required("break_glass_grant_id", ormschema.TextKey(255)), required("workspace_id", ormschema.TextKey(191)), required("state", ormschema.TextKey(191)),
 		required("actor_id", ormschema.TextKey(255)), required("approver_ids_json", ormschema.LongText()), required("reason", ormschema.LongText()),
 		required("incident_ref", ormschema.TextKey(255)), required("alert_target", ormschema.TextKey(255)), required("audit_event_id", ormschema.TextKey(255)),
 		required("expires_at", ormschema.BigInt()), required("revision", ormschema.BigInt()), required("created_at", ormschema.BigInt()),
 		required("updated_at", ormschema.BigInt()), defaulted("revoked_at", ormschema.BigInt(), 0),
 		defaulted("revoked_by", ormschema.TextKey(255), ""), required("revocation_note", ormschema.LongText()),
-	).PrimaryKey("id").Build()
+	).PrimaryKey("id").Unique("break_glass_grant_id").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", BreakGlassTableName, err)
 	}
@@ -137,7 +137,7 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 	}{
 		{"uniq_runtime_operation_key", TableName, true, []string{"workspace_id", "system_purpose", "owner", "kind", "idempotency_key"}},
 		{"idx_runtime_operation_status", TableName, false, []string{"workspace_id", "owner", "status", "created_at"}},
-		{"idx_runtime_operation_parent", TableName, false, []string{"workspace_id", "parent_id", "created_at"}},
+		{"idx_runtime_operation_parent", TableName, false, []string{"workspace_id", "parent_operation_id", "created_at"}},
 		{"idx_runtime_operation_lease", TableName, false, []string{"owner", "status", "lease_expires_at"}},
 		{"idx_runtime_operation_expiry", TableName, false, []string{"workspace_id", "owner", "kind", "status", "expires_at"}},
 		{"uniq_runtime_operation_control", ControlTableName, true, []string{"system_purpose", "control_kind", "owner"}},
@@ -163,6 +163,10 @@ func required(name string, kind ormschema.ColumnType) ormschema.ColumnDefinition
 	return ormschema.Column(name, kind).NotNull()
 }
 
+func physicalID() ormschema.ColumnDefinition {
+	return ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement()
+}
+
 func defaulted(name string, kind ormschema.ColumnType, value any) ormschema.ColumnDefinition {
 	return ormschema.Column(name, kind).NotNull().DefaultValue(value)
 }
@@ -170,20 +174,22 @@ func defaulted(name string, kind ormschema.ColumnType, value any) ormschema.Colu
 func SchemaOwnership() []schemaownership.Table {
 	return []schemaownership.Table{
 		{
-			Name: TableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeExplicitMixed,
+			Name: TableName, Owner: MigrationOwner, Kind: schemaownership.KindEntity, WorkspaceScope: schemaownership.ScopeExplicitMixed,
 			RetentionClass: schemaownership.RetentionRegisteredRowPolicy, PrimaryKey: []string{"id"},
+			EntityIDColumn: "operation_id", EntityIDPrefix: "op", BusinessKey: []string{"operation_id"},
 			BoundedQueryPath: "exact workspace or system scope plus owner/kind/idempotency identity; lists and expiry scans are limited",
 			DeletionPolicy:   "registered owner policy sets expires_at; only terminal expired rows outside protected status are deleted",
 		},
 		{
-			Name: ControlTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeInstallation,
-			RetentionClass: schemaownership.RetentionInstallation, UniqueKey: []string{"system_purpose", "control_kind", "owner"},
+			Name: ControlTableName, Owner: MigrationOwner, Kind: schemaownership.KindState, WorkspaceScope: schemaownership.ScopeInstallation,
+			RetentionClass: schemaownership.RetentionInstallation, PrimaryKey: []string{"id"},
 			BoundedQueryPath: "exact system_purpose/control_kind/owner identity or registered state existence check",
 			DeletionPolicy:   "current desired control state is revision-fenced and retained for the installation lifetime",
 		},
 		{
-			Name: BreakGlassTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
+			Name: BreakGlassTableName, Owner: MigrationOwner, Kind: schemaownership.KindEntity, WorkspaceScope: schemaownership.ScopeWorkspace,
 			RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"id"},
+			EntityIDColumn: "break_glass_grant_id", EntityIDPrefix: "brkgrant", BusinessKey: []string{"break_glass_grant_id"},
 			BoundedQueryPath: "exact id or workspace-scoped active/list query with an enforced result limit",
 			DeletionPolicy:   "grant rows are revoked or expire in place and remain as legal audit evidence",
 		},

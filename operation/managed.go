@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/domainry/domainry-foundation/entityid"
 	"github.com/domainry/domainry-orm/sqlhost"
 )
 
@@ -40,14 +41,14 @@ func (value ManagedOperation) Validate() error {
 }
 
 type ManagedIdentity struct {
-	ID    string
-	Scope Scope
-	Owner string
-	Kind  string
+	OperationID string
+	Scope       Scope
+	Owner       string
+	Kind        string
 }
 
 func (value ManagedIdentity) Validate() error {
-	if strings.TrimSpace(value.ID) == "" || strings.TrimSpace(value.Owner) == "" || strings.TrimSpace(value.Kind) == "" {
+	if entityid.Validate("op", value.OperationID) != nil || strings.TrimSpace(value.Owner) == "" || strings.TrimSpace(value.Kind) == "" {
 		return fmt.Errorf("managed operation identity is required")
 	}
 	workspace, system := strings.TrimSpace(value.Scope.WorkspaceID) != "", strings.TrimSpace(value.Scope.SystemPurpose) != ""

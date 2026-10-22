@@ -12,27 +12,28 @@ import (
 )
 
 var breakGlassColumns = []string{
-	"id", "workspace_id", "state", "actor_id", "approver_ids_json", "reason", "incident_ref", "alert_target", "audit_event_id",
+	"id", "break_glass_grant_id", "workspace_id", "state", "actor_id", "approver_ids_json", "reason", "incident_ref", "alert_target", "audit_event_id",
 	"expires_at", "revision", "created_at", "updated_at", "revoked_at", "revoked_by", "revocation_note",
 }
 
 type BreakGlassGrant struct {
-	ID              string
-	WorkspaceID     string
-	State           string
-	ActorID         string
-	ApproverIDsJSON json.RawMessage
-	Reason          string
-	IncidentRef     string
-	AlertTarget     string
-	AuditEventID    string
-	ExpiresAt       string
-	Revision        int64
-	CreatedAt       string
-	UpdatedAt       string
-	RevokedAt       string
-	RevokedBy       string
-	RevocationNote  string
+	ID                int64
+	BreakGlassGrantID string
+	WorkspaceID       string
+	State             string
+	ActorID           string
+	ApproverIDsJSON   json.RawMessage
+	Reason            string
+	IncidentRef       string
+	AlertTarget       string
+	AuditEventID      string
+	ExpiresAt         string
+	Revision          int64
+	CreatedAt         string
+	UpdatedAt         string
+	RevokedAt         string
+	RevokedBy         string
+	RevocationNote    string
 }
 
 func (s *SQLStore) CountActiveBreakGlass(ctx context.Context, workspaceID, state, expiresAfter string) (int64, error) {
@@ -84,7 +85,7 @@ func (s *SQLStore) GetBreakGlass(ctx context.Context, id string) (BreakGlassGran
 	if id = strings.TrimSpace(id); id == "" {
 		return BreakGlassGrant{}, false, fmt.Errorf("break-glass id is required")
 	}
-	statement, arguments, err := query.NewSelectBuilder(s.dialect, BreakGlassTableName).Columns(breakGlassColumns...).Where(query.Equal("id", id)).Limit(1).Build()
+	statement, arguments, err := query.NewSelectBuilder(s.dialect, BreakGlassTableName).Columns(breakGlassColumns...).Where(query.Equal("break_glass_grant_id", id)).Limit(1).Build()
 	if err != nil {
 		return BreakGlassGrant{}, false, err
 	}
@@ -158,7 +159,7 @@ func (s *SQLStore) RevokeBreakGlass(ctx context.Context, value BreakGlassGrant, 
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(s.dialect, BreakGlassTableName, value.WorkspaceID).
 		Set("state", value.State).Set("revision", value.Revision).Set("updated_at", mustOperationTimestampMillis(value.UpdatedAt)).Set("revoked_at", mustOperationTimestampMillis(value.RevokedAt)).
 		Set("revoked_by", value.RevokedBy).Set("revocation_note", value.RevocationNote).
-		Where(query.And(query.Equal("id", value.ID), query.Equal("state", expectedState), query.Equal("revision", expectedRevision))).Build()
+		Where(query.And(query.Equal("break_glass_grant_id", value.BreakGlassGrantID), query.Equal("state", expectedState), query.Equal("revision", expectedRevision))).Build()
 	if err != nil {
 		return false, err
 	}
@@ -180,7 +181,7 @@ func (s *SQLStore) EraseBreakGlass(ctx context.Context, workspaceID, id string) 
 	}
 	statement, arguments, err := query.NewWorkspaceUpdateBuilder(s.dialect, BreakGlassTableName, workspaceID).
 		Set("actor_id", "anonymous").Set("approver_ids_json", "[]").Set("reason", "").Set("incident_ref", "").Set("alert_target", "").
-		Set("revocation_note", "").Set("revoked_by", "anonymous").Set("state", "revoked").Where(query.Equal("id", id)).Build()
+		Set("revocation_note", "").Set("revoked_by", "anonymous").Set("state", "revoked").Where(query.Equal("break_glass_grant_id", id)).Build()
 	if err != nil {
 		return false, err
 	}
@@ -193,7 +194,7 @@ func (s *SQLStore) EraseBreakGlass(ctx context.Context, workspaceID, id string) 
 }
 
 func (value BreakGlassGrant) validate() error {
-	for _, required := range []string{value.ID, value.WorkspaceID, value.State, value.ActorID, value.IncidentRef, value.AlertTarget, value.AuditEventID, value.ExpiresAt, value.CreatedAt, value.UpdatedAt} {
+	for _, required := range []string{value.BreakGlassGrantID, value.WorkspaceID, value.State, value.ActorID, value.IncidentRef, value.AlertTarget, value.AuditEventID, value.ExpiresAt, value.CreatedAt, value.UpdatedAt} {
 		if strings.TrimSpace(required) == "" {
 			return fmt.Errorf("break-glass required fields are missing")
 		}
@@ -210,24 +211,24 @@ func (value BreakGlassGrant) validate() error {
 }
 
 func breakGlassValues(value BreakGlassGrant) []any {
-	return []any{value.ID, value.WorkspaceID, value.State, value.ActorID, string(value.ApproverIDsJSON), value.Reason, value.IncidentRef, value.AlertTarget,
+	return []any{value.ID, value.BreakGlassGrantID, value.WorkspaceID, value.State, value.ActorID, string(value.ApproverIDsJSON), value.Reason, value.IncidentRef, value.AlertTarget,
 		value.AuditEventID, mustOperationTimestampMillis(value.ExpiresAt), value.Revision, mustOperationTimestampMillis(value.CreatedAt), mustOperationTimestampMillis(value.UpdatedAt), mustOperationTimestampMillis(value.RevokedAt), value.RevokedBy, value.RevocationNote}
 }
 
 func breakGlassColumnsWithoutWorkspace() []string {
-	return append(append([]string{}, breakGlassColumns[:1]...), breakGlassColumns[2:]...)
+	return append(append([]string{}, breakGlassColumns[1:2]...), breakGlassColumns[3:]...)
 }
 
 func breakGlassValuesWithoutWorkspace(value BreakGlassGrant) []any {
 	values := breakGlassValues(value)
-	return append(append([]any{}, values[:1]...), values[2:]...)
+	return append(append([]any{}, values[1:2]...), values[3:]...)
 }
 
 func scanBreakGlass(scanner scanner) (BreakGlassGrant, error) {
 	var value BreakGlassGrant
 	var approvers string
 	var expiresAt, createdAt, updatedAt, revokedAt int64
-	err := scanner.Scan(&value.ID, &value.WorkspaceID, &value.State, &value.ActorID, &approvers, &value.Reason, &value.IncidentRef, &value.AlertTarget,
+	err := scanner.Scan(&value.ID, &value.BreakGlassGrantID, &value.WorkspaceID, &value.State, &value.ActorID, &approvers, &value.Reason, &value.IncidentRef, &value.AlertTarget,
 		&value.AuditEventID, &expiresAt, &value.Revision, &createdAt, &updatedAt, &revokedAt, &value.RevokedBy, &value.RevocationNote)
 	if err != nil {
 		return value, err

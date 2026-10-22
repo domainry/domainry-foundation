@@ -64,20 +64,21 @@ func SchemaMigrations(driver, schema string) ([]SchemaMigration, error) {
 }
 
 func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
-	requests, _, err := ormschema.NewTable(renderer, RequestTableName).IfNotExists().Columns(
-		requiredKey("id"), requiredKey("workspace_id"), requiredKey("request_type"), requiredKey("kind"),
+	requests, _, err := ormschema.NewTableWithRequiredColumns(renderer, RequestTableName, physicalID()).IfNotExists().Columns(
+		requiredKey("request_id"), requiredKey("workspace_id"), requiredKey("request_type"), requiredKey("kind"),
+		ormschema.Column("idempotency_key", ormschema.TextKey(indexKeyLength)),
 		requiredKey("status"), requiredKey("subject_id"), optionalKey("resolved_identity"), optionalKey("requested_by"),
 		optionalKey("owner_org_id"), optionalMillis("download_expires_at"),
 		ormschema.Column("backup_pending", ormschema.Boolean()).NotNull().DefaultValue(false),
 		requiredMillis("updated_at"), ormschema.Column("payload_json", ormschema.Text()).NotNull(),
-	).Build()
+	).PrimaryKey("id").Unique("request_id").Unique("workspace_id", "idempotency_key").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", RequestTableName, err)
 	}
-	steps, _, err := ormschema.NewTable(renderer, StepTableName).IfNotExists().Columns(
+	steps, _, err := ormschema.NewTableWithRequiredColumns(renderer, StepTableName, physicalID()).IfNotExists().Columns(
 		requiredKey("workspace_id"), requiredKey("request_id"), requiredKey("owner"), requiredKey("operation"),
 		ormschema.Column("payload_json", ormschema.Text()).NotNull(), requiredMillis("completed_at"),
-	).PrimaryKey("workspace_id", "request_id", "owner", "operation").Build()
+	).PrimaryKey("id").Unique("workspace_id", "request_id", "owner", "operation").Build()
 	if err != nil {
 		return nil, fmt.Errorf("build %s: %w", StepTableName, err)
 	}
@@ -88,9 +89,9 @@ func SchemaMigrationsForDialect(renderer Dialect) ([]SchemaMigration, error) {
 		unique      bool
 		columns     []string
 	}{
-		{"uniq_subject_workspace_identity", RequestTableName, true, []string{"workspace_id", "id"}},
+		{"idx_subject_page", RequestTableName, false, []string{"workspace_id", "id"}},
 		{"idx_subject_identity", RequestTableName, false, []string{"workspace_id", "subject_id", "status", "updated_at"}},
-		{"idx_subject_erasure_identity", RequestTableName, false, []string{"workspace_id", "request_type", "kind", "resolved_identity", "id"}},
+		{"idx_subject_erasure_identity", RequestTableName, false, []string{"workspace_id", "request_type", "kind", "resolved_identity", "request_id"}},
 		{"idx_subject_request_type", RequestTableName, false, []string{"workspace_id", "request_type", "updated_at", "id"}},
 		{"idx_subject_worker", RequestTableName, false, []string{"request_type", "kind", "status", "updated_at", "id"}},
 		{"idx_subject_deletion_replay", RequestTableName, false, []string{"workspace_id", "kind", "status", "backup_pending", "updated_at"}},
@@ -117,6 +118,10 @@ func requiredKey(name string) ormschema.ColumnDefinition {
 	return ormschema.Column(name, ormschema.TextKey(indexKeyLength)).NotNull()
 }
 
+func physicalID() ormschema.ColumnDefinition {
+	return ormschema.Column("id", ormschema.BigInt()).NotNull().AutoIncrement()
+}
+
 func optionalKey(name string) ormschema.ColumnDefinition {
 	return ormschema.Column(name, ormschema.TextKey(indexKeyLength)).NotNull().DefaultValue("")
 }
@@ -132,14 +137,15 @@ func optionalMillis(name string) ormschema.ColumnDefinition {
 func SchemaOwnership() []schemaownership.Table {
 	return []schemaownership.Table{
 		{
-			Name: RequestTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
-			RetentionClass: schemaownership.RetentionLegalAudit, UniqueKey: []string{"workspace_id", "id"},
+			Name: RequestTableName, Owner: MigrationOwner, Kind: schemaownership.KindEntity, WorkspaceScope: schemaownership.ScopeWorkspace,
+			RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"id"},
+			EntityIDColumn: "request_id", EntityIDPrefix: "subreq", BusinessKey: []string{"request_id"},
 			BoundedQueryPath: "workspace/request identity; subject, request-type and worker indexes bound lifecycle scans",
 			DeletionPolicy:   "request state is retained as lifecycle audit evidence; subject payloads follow the governing export/erasure policy",
 		},
 		{
-			Name: StepTableName, Owner: MigrationOwner, WorkspaceScope: schemaownership.ScopeWorkspace,
-			RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"workspace_id", "request_id", "owner", "operation"},
+			Name: StepTableName, Owner: MigrationOwner, Kind: schemaownership.KindIdempotency, WorkspaceScope: schemaownership.ScopeWorkspace,
+			RetentionClass: schemaownership.RetentionLegalAudit, PrimaryKey: []string{"id"},
 			BoundedQueryPath: "workspace/request identity or workspace/owner/operation erasure-fence identity",
 			DeletionPolicy:   "idempotent completion evidence is retained with its lifecycle request",
 		},

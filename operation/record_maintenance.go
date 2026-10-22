@@ -14,12 +14,12 @@ type SubjectResource struct {
 }
 
 type RecordErasure struct {
-	ID             string
+	OperationID    string
 	IdempotencyKey string
 }
 
 type RecordLocator struct {
-	ID          string
+	OperationID string
 	WorkspaceID string
 }
 
@@ -101,15 +101,15 @@ func (s *SQLStore) EraseRecords(ctx context.Context, workspaceID string, values 
 	}
 	var total int64
 	for _, value := range values {
-		value.ID, value.IdempotencyKey = strings.TrimSpace(value.ID), strings.TrimSpace(value.IdempotencyKey)
-		if value.ID == "" || value.IdempotencyKey == "" {
+		value.OperationID, value.IdempotencyKey = strings.TrimSpace(value.OperationID), strings.TrimSpace(value.IdempotencyKey)
+		if value.OperationID == "" || value.IdempotencyKey == "" {
 			return total, fmt.Errorf("operation erasure identity is incomplete")
 		}
 		statement, arguments, err := recordUpdate(s, workspaceID).
 			Set("requested_by", "anonymous").Set("reason", "").Set("reference", "").Set("result_json", "{}").Set("metadata_json", "{}").
 			Set("related_ids_json", "[]").Set("evidence_json", "[]").Set("next_action", "").Set("request_fingerprint", "").
 			Set("idempotency_key", value.IdempotencyKey).Set("status", "failed").Set("error_code", "runtime.subject_erased").
-			Set("lease_owner", "").Set("lease_expires_at", int64(0)).Where(query.Equal("id", value.ID)).Build()
+			Set("lease_owner", "").Set("lease_expires_at", int64(0)).Where(query.Equal("operation_id", value.OperationID)).Build()
 		if err != nil {
 			return total, err
 		}
@@ -187,7 +187,7 @@ func (s *SQLStore) ListExpiredRecordLocators(ctx context.Context, filter RecordF
 		limit = 500
 	}
 	predicate = and(predicate, query.NotEqual("expires_at", int64(0)), query.LessThanOrEqual("expires_at", nowMillis), query.NotEqual("status", protectedStatus))
-	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Columns("id", "workspace_id").Where(predicate).
+	statement, arguments, err := recordSelect(s, filter.WorkspaceID).Columns("operation_id", "workspace_id").Where(predicate).
 		OrderBy(query.Ascending("expires_at"), query.Ascending("id")).Limit(limit).Build()
 	if err != nil {
 		return nil, err
@@ -200,7 +200,7 @@ func (s *SQLStore) ListExpiredRecordLocators(ctx context.Context, filter RecordF
 	values := []RecordLocator{}
 	for rows.Next() {
 		var value RecordLocator
-		if err := rows.Scan(&value.ID, &value.WorkspaceID); err != nil {
+		if err := rows.Scan(&value.OperationID, &value.WorkspaceID); err != nil {
 			return nil, err
 		}
 		values = append(values, value)
@@ -233,7 +233,7 @@ func (s *SQLStore) DeleteExpiredRecords(ctx context.Context, filter RecordFilter
 	if err != nil {
 		return 0, err
 	}
-	predicate = and(predicate, query.In("id", values...), query.NotEqual("expires_at", int64(0)), query.LessThanOrEqual("expires_at", nowMillis), query.NotEqual("status", protectedStatus))
+	predicate = and(predicate, query.In("operation_id", values...), query.NotEqual("expires_at", int64(0)), query.LessThanOrEqual("expires_at", nowMillis), query.NotEqual("status", protectedStatus))
 	var builder *query.DeleteBuilder
 	if strings.TrimSpace(filter.WorkspaceID) != "" {
 		builder = query.NewWorkspaceDeleteBuilder(s.dialect, TableName, strings.TrimSpace(filter.WorkspaceID))
@@ -265,5 +265,5 @@ func recordIDsPredicate(workspaceID string, ids []string) (query.Predicate, erro
 	if len(values) == 0 {
 		return nil, fmt.Errorf("operation ids are required")
 	}
-	return query.In("id", values...), nil
+	return query.In("operation_id", values...), nil
 }
