@@ -310,15 +310,18 @@ func Sync(logger *zap.Logger) error {
 	return err
 }
 
-// FromContext enriches the global logger with request-scoped correlation data.
+// FromContext enriches the global logger with trace and owner data. API
+// request_id is an alias of trace_id and is therefore not duplicated in logs.
 func FromContext(ctx context.Context) *zap.Logger {
 	logger := zap.L()
-	fields := make([]zap.Field, 0, 7)
+	fields := make([]zap.Field, 0, 5)
+	traceID := requestcontext.TraceID(ctx)
+	if traceID == "" {
+		traceID = requestcontext.RequestID(ctx)
+	}
 	for _, entry := range []struct{ key, value string }{
-		{"request_id", requestcontext.RequestID(ctx)},
-		{"trace_id", requestcontext.TraceID(ctx)},
+		{"trace_id", traceID},
 		{"span_id", requestcontext.SpanID(ctx)},
-		{"correlation_id", requestcontext.CorrelationID(ctx)},
 		{"workspace_id", requestcontext.WorkspaceID(ctx)},
 		{"actor_id", requestcontext.ActorID(ctx)},
 		{"owner_execution_id", requestcontext.OwnerExecutionID(ctx)},

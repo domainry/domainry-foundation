@@ -14,9 +14,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const CorrelationIDHeader = "X-Correlation-ID"
-
 type httpClientOperationKey struct{}
+type requestedTraceIDKey struct{}
 
 // WithHTTPClientOperation attaches a bounded logical operation name to an
 // outbound request. It must be a source-owned constant, never a raw URL.
@@ -28,28 +27,40 @@ func WithHTTPClientOperation(ctx context.Context, operation string) context.Cont
 	return context.WithValue(ctx, httpClientOperationKey{}, operation)
 }
 
-// ExtractHTTPContext restores standard W3C trace/baggage context and the
-// Domainry end-to-end correlation identity at an inbound HTTP boundary.
+// ExtractHTTPContext restores standard W3C trace and baggage context at an
+// inbound HTTP boundary. A valid X-Request-ID selects the same root trace ID;
+// business and durable-execution identities are not accepted from headers.
 func ExtractHTTPContext(ctx context.Context, header http.Header) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(header))
-	if correlationID := normalizedCorrelationValue(header.Get(CorrelationIDHeader)); correlationID != "" {
-		ctx = requestcontext.WithCorrelationID(ctx, correlationID)
+	requestID := requestcontext.NormalizeTraceID(header.Get(RequestIDHeader))
+	if requestID == "" {
+		return ctx
 	}
-	return ctx
+	requestTraceID, _ := trace.TraceIDFromHex(requestID)
+	remote := trace.SpanContextFromContext(ctx)
+	if remote.IsValid() && remote.TraceID() == requestTraceID {
+		return ctx
+	}
+	// X-Request-ID is the caller-selected root trace ID. When it is present it
+	// wins over a conflicting traceparent so the process never exposes two
+	// different identities for the same request.
+	ctx = trace.ContextWithSpanContext(ctx, trace.SpanContext{})
+	return context.WithValue(ctx, requestedTraceIDKey{}, requestTraceID)
 }
 
-// InjectHTTPContext propagates standard W3C trace/baggage context and the
-// end-to-end correlation identity. Request IDs remain local to each service.
+// InjectHTTPContext propagates standard W3C trace and baggage context plus the
+// same trace ID under the public X-Request-ID alias. Business execution
+// identities remain local to their owners.
 func InjectHTTPContext(ctx context.Context, header http.Header) {
 	if ctx == nil || header == nil {
 		return
 	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(header))
-	if correlationID := normalizedCorrelationValue(requestcontext.CorrelationID(ctx)); correlationID != "" {
-		header.Set(CorrelationIDHeader, correlationID)
+	if requestID := requestcontext.NormalizeTraceID(requestcontext.RequestID(ctx)); requestID != "" {
+		header.Set(RequestIDHeader, requestID)
 	}
 }
 
@@ -146,24 +157,4 @@ func InstrumentHTTPClient(source *http.Client, tracerName string) *http.Client {
 	}
 	clone.Transport = HTTPTransport{Base: source.Transport, TracerName: tracerName}
 	return &clone
-}
-
-func normalizedCorrelationValue(raw string) string {
-	value := strings.TrimSpace(raw)
-	if value == "" || len(value) > 128 {
-		return ""
-	}
-	for _, character := range value {
-		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("._:-", character) {
-			continue
-		}
-		return ""
-	}
-	return value
-}
-
-// NormalizeHTTPIdentity validates request and correlation identifiers before
-// they enter context, logs or response headers.
-func NormalizeHTTPIdentity(raw string) string {
-	return normalizedCorrelationValue(raw)
 }

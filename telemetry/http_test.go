@@ -22,7 +22,7 @@ import (
 	"go.uber.org/zap/zaptest/observer"
 )
 
-func TestInstrumentHTTPClientPropagatesTraceAndCorrelation(t *testing.T) {
+func TestInstrumentHTTPClientPropagatesOneTraceIdentity(t *testing.T) {
 	logCore, observedLogs := observer.New(zapcore.InfoLevel)
 	previousLogger := zap.L()
 	zap.ReplaceGlobals(zap.New(logCore))
@@ -41,12 +41,12 @@ func TestInstrumentHTTPClientPropagatesTraceAndCorrelation(t *testing.T) {
 	})
 
 	var serverContext trace.SpanContext
-	var serverCorrelation, inboundRequestID, baggageValue string
+	var inboundRequestID, inboundCorrelationID, baggageValue string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		ctx, span := StartHTTPServerSpan(request.Context(), request.Header, "test.server", "POST /saas/items", request.Method)
 		defer span.End()
 		serverContext = trace.SpanContextFromContext(ctx)
-		serverCorrelation = requestcontext.CorrelationID(ctx)
+		inboundCorrelationID = request.Header.Get("X-Correlation-ID")
 		baggageValue = baggage.FromContext(ctx).Member("domainry.test").Value()
 		logging.FromContext(ctx).Info("saas_request")
 		inboundRequestID = request.Header.Get("X-Request-ID")
@@ -54,8 +54,7 @@ func TestInstrumentHTTPClientPropagatesTraceAndCorrelation(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	ctx := requestcontext.WithCorrelationID(t.Context(), "corr-123")
-	ctx = requestcontext.WithRequestID(ctx, "runtime-request-must-not-cross-hop")
+	ctx := requestcontext.WithRequestID(t.Context(), "runtime-request-must-not-cross-hop")
 	member, err := baggage.NewMember("domainry.test", "propagated")
 	if err != nil {
 		t.Fatal(err)
@@ -78,8 +77,8 @@ func TestInstrumentHTTPClientPropagatesTraceAndCorrelation(t *testing.T) {
 	_ = response.Body.Close()
 	parent.End()
 
-	if !serverContext.IsValid() || serverCorrelation != "corr-123" || inboundRequestID != "" || baggageValue != "propagated" {
-		t.Fatalf("server context=%v correlation=%q request_id=%q baggage=%q", serverContext, serverCorrelation, inboundRequestID, baggageValue)
+	if !serverContext.IsValid() || inboundCorrelationID != "" || inboundRequestID != serverContext.TraceID().String() || baggageValue != "propagated" {
+		t.Fatalf("server context=%v correlation=%q request_id=%q baggage=%q", serverContext, inboundCorrelationID, inboundRequestID, baggageValue)
 	}
 	ended := recorder.Ended()
 	var clientSpan, serverSpan sdktrace.ReadOnlySpan
@@ -101,12 +100,12 @@ func TestInstrumentHTTPClientPropagatesTraceAndCorrelation(t *testing.T) {
 		t.Fatalf("trace parent mismatch client=%v server=%v server_parent=%v", clientSpan.SpanContext(), serverSpan.SpanContext(), serverSpan.Parent())
 	}
 	logs := observedLogs.All()
-	if len(logs) != 1 || logs[0].ContextMap()["trace_id"] != serverSpan.SpanContext().TraceID().String() || logs[0].ContextMap()["span_id"] != serverSpan.SpanContext().SpanID().String() || logs[0].ContextMap()["correlation_id"] != "corr-123" {
+	if len(logs) != 1 || logs[0].ContextMap()["trace_id"] != serverSpan.SpanContext().TraceID().String() || logs[0].ContextMap()["span_id"] != serverSpan.SpanContext().SpanID().String() || logs[0].ContextMap()["correlation_id"] != nil {
 		t.Fatalf("server logs=%#v", logs)
 	}
 }
 
-func TestHTTPPropagationRejectsInvalidCorrelationAndCreatesAttemptSpans(t *testing.T) {
+func TestHTTPPropagationOmitsBusinessCorrelationAndCreatesAttemptSpans(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	previousProvider := otel.GetTracerProvider()
@@ -120,13 +119,13 @@ func TestHTTPPropagationRejectsInvalidCorrelationAndCreatesAttemptSpans(t *testi
 	})
 
 	transport := roundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		if request.Header.Get(CorrelationIDHeader) != "" {
-			t.Fatalf("invalid correlation propagated: %q", request.Header.Get(CorrelationIDHeader))
+		if request.Header.Get("X-Correlation-ID") != "" {
+			t.Fatalf("business correlation propagated: %q", request.Header.Get("X-Correlation-ID"))
 		}
 		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}, Request: request}, nil
 	})
 	client := InstrumentHTTPClient(&http.Client{Transport: transport}, "test.attempt")
-	ctx := requestcontext.WithCorrelationID(context.Background(), "contains space")
+	ctx := context.Background()
 	for range 2 {
 		request, err := http.NewRequestWithContext(WithHTTPClientOperation(ctx, "identity.resolve"), http.MethodGet, "https://identity.example.test/users", nil)
 		if err != nil {

@@ -14,13 +14,14 @@ import (
 	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	nooptrace "go.opentelemetry.io/otel/trace/noop"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestHTTPServerMiddlewareExtractsContextAndWritesOneTerminalEvent(t *testing.T) {
-	provider := sdktrace.NewTracerProvider()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(contextTraceIDGenerator{}))
 	previousProvider := otel.GetTracerProvider()
 	otel.SetTracerProvider(provider)
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()); otel.SetTracerProvider(previousProvider) })
@@ -31,11 +32,8 @@ func TestHTTPServerMiddlewareExtractsContextAndWritesOneTerminalEvent(t *testing
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /widgets/{id}", func(writer http.ResponseWriter, request *http.Request) {
-		if requestcontext.TraceID(request.Context()) != "4bf92f3577b34da6a3ce929d0e0e4736" {
-			t.Fatalf("trace id=%q", requestcontext.TraceID(request.Context()))
-		}
-		if requestcontext.RequestID(request.Context()) == "" || requestcontext.RequestID(request.Context()) == "downstream-request" || requestcontext.CorrelationID(request.Context()) != "corr-123" {
-			t.Fatalf("request context request=%q correlation=%q", requestcontext.RequestID(request.Context()), requestcontext.CorrelationID(request.Context()))
+		if requestcontext.TraceID(request.Context()) != "4bf92f3577b34da6a3ce929d0e0e4736" || requestcontext.RequestID(request.Context()) != requestcontext.TraceID(request.Context()) {
+			t.Fatalf("request/trace id=%q/%q", requestcontext.RequestID(request.Context()), requestcontext.TraceID(request.Context()))
 		}
 		writer.WriteHeader(http.StatusNoContent)
 	})
@@ -43,11 +41,11 @@ func TestHTTPServerMiddlewareExtractsContextAndWritesOneTerminalEvent(t *testing
 	request := httptest.NewRequest(http.MethodGet, "/widgets/secret?token=hidden", nil)
 	request.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	request.Header.Set(RequestIDHeader, "downstream-request")
-	request.Header.Set(CorrelationIDHeader, "corr-123")
+	request.Header.Set("X-Correlation-ID", "untrusted-business-correlation")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
-	if response.Header().Get(RequestIDHeader) == "" || response.Header().Get(RequestIDHeader) == "downstream-request" || response.Header().Get(CorrelationIDHeader) != "corr-123" {
+	if response.Header().Get(RequestIDHeader) != "4bf92f3577b34da6a3ce929d0e0e4736" || response.Header().Get("X-Correlation-ID") != "" {
 		t.Fatalf("response headers=%v", response.Header())
 	}
 	entries := observed.FilterMessage("http_request").All()
@@ -60,6 +58,70 @@ func TestHTTPServerMiddlewareExtractsContextAndWritesOneTerminalEvent(t *testing
 	}
 	if _, leaked := fields["path"]; leaked {
 		t.Fatalf("raw path field leaked: %#v", fields)
+	}
+}
+
+func TestHTTPServerMiddlewareUsesCallerRequestIDAsTraceID(t *testing.T) {
+	provider := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(contextTraceIDGenerator{}))
+	previousProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()); otel.SetTracerProvider(previousProvider) })
+
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	var observedRequestID, observedTraceID string
+	handler := HTTPServerMiddleware(HTTPServerConfig{TracerName: "test"}, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		observedRequestID = requestcontext.RequestID(request.Context())
+		observedTraceID = requestcontext.TraceID(request.Context())
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	request.Header.Set(RequestIDHeader, traceID)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if observedRequestID != traceID || observedTraceID != traceID || response.Header().Get(RequestIDHeader) != traceID {
+		t.Fatalf("request=%q trace=%q response=%q", observedRequestID, observedTraceID, response.Header().Get(RequestIDHeader))
+	}
+}
+
+func TestHTTPServerMiddlewareGeneratesTraceIDWhenRequestIDIsAbsent(t *testing.T) {
+	provider := sdktrace.NewTracerProvider(sdktrace.WithIDGenerator(contextTraceIDGenerator{}))
+	previousProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()); otel.SetTracerProvider(previousProvider) })
+
+	var observedRequestID, observedTraceID string
+	handler := HTTPServerMiddleware(HTTPServerConfig{TracerName: "test"}, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		observedRequestID = requestcontext.RequestID(request.Context())
+		observedTraceID = requestcontext.TraceID(request.Context())
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/probe", nil))
+
+	if requestcontext.NormalizeTraceID(observedRequestID) == "" || observedRequestID != observedTraceID || response.Header().Get(RequestIDHeader) != observedTraceID {
+		t.Fatalf("generated request=%q trace=%q response=%q", observedRequestID, observedTraceID, response.Header().Get(RequestIDHeader))
+	}
+}
+
+func TestHTTPServerMiddlewareKeepsCallerTraceAliasWhenTracingIsDisabled(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	otel.SetTracerProvider(nooptrace.NewTracerProvider())
+	t.Cleanup(func() { otel.SetTracerProvider(previousProvider) })
+
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	var observedRequestID string
+	handler := HTTPServerMiddleware(HTTPServerConfig{TracerName: "test"}, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		observedRequestID = requestcontext.RequestID(request.Context())
+		writer.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/probe", nil)
+	request.Header.Set(RequestIDHeader, traceID)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if observedRequestID != traceID || response.Header().Get(RequestIDHeader) != traceID {
+		t.Fatalf("request=%q response=%q", observedRequestID, response.Header().Get(RequestIDHeader))
 	}
 }
 

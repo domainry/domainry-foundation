@@ -34,7 +34,7 @@ func TestDisabledExporterStillInstallsW3CPropagation(t *testing.T) {
 	}
 }
 
-func TestAsyncBoundaryCreatesNewRootWithLink(t *testing.T) {
+func TestAsyncBoundaryContinuesProducerTrace(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
@@ -44,11 +44,11 @@ func TestAsyncBoundaryCreatesNewRootWithLink(t *testing.T) {
 	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
 	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
 	parent := trace.ContextWithSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled}))
-	link := ParseAsyncLink(CaptureAsyncLink(parent, "corr-1"))
-	_, span := StartLinkedSpan(context.Background(), "test", "outbox.send", link)
+	link := ParseAsyncLink(CaptureAsyncLink(parent))
+	_, span := StartAsyncSpan(context.Background(), "test", "outbox.send", link)
 	span.End()
 	ended := recorder.Ended()
-	if len(ended) != 1 || ended[0].Parent().IsValid() || len(ended[0].Links()) != 1 || ended[0].Links()[0].SpanContext.TraceID() != traceID || link.CorrelationID != "corr-1" {
+	if len(ended) != 1 || ended[0].Parent().SpanID() != spanID || ended[0].SpanContext().TraceID() != traceID || len(ended[0].Links()) != 0 {
 		t.Fatalf("async span=%#v link=%#v", ended, link)
 	}
 }
@@ -60,8 +60,7 @@ func TestUseCaseToPersistedAsyncWorkerTraceChain(t *testing.T) {
 	otel.SetTracerProvider(provider)
 	t.Cleanup(func() { _ = provider.Shutdown(t.Context()); otel.SetTracerProvider(previous) })
 
-	requestContext := requestcontext.WithCorrelationID(t.Context(), "correlation-42")
-	requestContext = requestcontext.WithOwnerExecutionID(requestContext, "execution-42")
+	requestContext := requestcontext.WithOwnerExecutionID(t.Context(), "execution-42")
 	requestContext, requestSpan := provider.Tracer("test.http").Start(requestContext, "POST /actions/{actionKey}")
 	applicationContext, useCaseSpan := StartUseCase(requestContext, "action.invoke")
 	payload := EnsureAsyncPayload(applicationContext, map[string]any{"record_id": "record-7"})
@@ -73,7 +72,7 @@ func TestUseCaseToPersistedAsyncWorkerTraceChain(t *testing.T) {
 		t.Fatalf("persisted telemetry link missing: %#v", payload)
 	}
 	link := ParseAsyncLink(persisted)
-	workerContext, workerSpan := StartLinkedSpan(context.Background(), "test.worker", "integration.outbox.send", link)
+	workerContext, workerSpan := StartAsyncSpan(context.Background(), "test.worker", "integration.outbox.send", link)
 	workerSpan.End()
 
 	ended := recorder.Ended()
@@ -97,17 +96,11 @@ func TestUseCaseToPersistedAsyncWorkerTraceChain(t *testing.T) {
 	if useCase.Parent().SpanID() != request.SpanContext().SpanID() {
 		t.Fatalf("use case parent=%s, want request span=%s", useCase.Parent().SpanID(), request.SpanContext().SpanID())
 	}
-	if worker.Parent().IsValid() {
-		t.Fatalf("worker reused a stale parent: %s", worker.Parent().SpanID())
+	if worker.Parent().SpanID() != useCase.SpanContext().SpanID() || worker.SpanContext().TraceID() != useCase.SpanContext().TraceID() {
+		t.Fatalf("worker parent=%s trace=%s, want use-case parent=%s trace=%s", worker.Parent().SpanID(), worker.SpanContext().TraceID(), useCase.SpanContext().SpanID(), useCase.SpanContext().TraceID())
 	}
-	if len(worker.Links()) != 1 || worker.Links()[0].SpanContext.SpanID() != useCase.SpanContext().SpanID() {
-		t.Fatalf("worker links=%#v, want persisted use-case link", worker.Links())
-	}
-	if link.CorrelationID != "correlation-42" {
-		t.Fatalf("correlation id=%q", link.CorrelationID)
-	}
-	if requestcontext.CorrelationID(workerContext) != "correlation-42" || requestcontext.OwnerExecutionID(workerContext) != "execution-42" {
-		t.Fatalf("worker context correlation=%q execution=%q", requestcontext.CorrelationID(workerContext), requestcontext.OwnerExecutionID(workerContext))
+	if requestcontext.OwnerExecutionID(workerContext) != "execution-42" {
+		t.Fatalf("worker context execution=%q", requestcontext.OwnerExecutionID(workerContext))
 	}
 }
 
@@ -130,15 +123,18 @@ func TestUseCaseSpanExportsStableNameAndResultWithoutErrorText(t *testing.T) {
 	}
 }
 
-func TestEnsureAsyncPayloadUsesCorrelationAndDoesNotOverwritePersistedLink(t *testing.T) {
-	ctx := requestcontext.WithCorrelationID(t.Context(), "corr-1")
+func TestEnsureAsyncPayloadUsesTraceAndDoesNotOverwritePersistedLink(t *testing.T) {
+	traceID, _ := trace.TraceIDFromHex("4bf92f3577b34da6a3ce929d0e0e4736")
+	spanID, _ := trace.SpanIDFromHex("00f067aa0ba902b7")
+	ctx := trace.ContextWithSpanContext(t.Context(), trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled}))
 	payload := EnsureAsyncPayload(ctx, map[string]any{"business": "value"})
 	link, ok := payload[AsyncPayloadKey].(map[string]any)
-	if !ok || link["correlation_id"] != "corr-1" {
+	if !ok || link["trace_id"] != traceID.String() || link["span_id"] != spanID.String() {
 		t.Fatalf("payload=%#v", payload)
 	}
-	payload[AsyncPayloadKey] = map[string]any{"correlation_id": "persisted"}
-	if got := EnsureAsyncPayload(requestcontext.WithCorrelationID(t.Context(), "corr-2"), payload)[AsyncPayloadKey].(map[string]any)["correlation_id"]; got != "persisted" {
+	persisted := map[string]any{"trace_id": traceID.String(), "span_id": spanID.String(), "trace_flags": byte(1)}
+	payload[AsyncPayloadKey] = persisted
+	if got := EnsureAsyncPayload(ctx, payload)[AsyncPayloadKey].(map[string]any); got["trace_id"] != traceID.String() || got["span_id"] != spanID.String() {
 		t.Fatalf("persisted link was overwritten: %v", got)
 	}
 	application := ApplicationPayload(map[string]any{"request_id": "req", AsyncPayloadKey: link, "order_id": "one"})
@@ -158,12 +154,11 @@ func TestConsumeAsyncPayloadSeparatesFrameworkMetadata(t *testing.T) {
 			"trace_id":           "4bf92f3577b34da6a3ce929d0e0e4736",
 			"span_id":            "00f067aa0ba902b7",
 			"trace_flags":        byte(1),
-			"correlation_id":     "corr-1",
 			"owner_execution_id": "execution-1",
 		},
 	}
 	applicationPayload, link := ConsumeAsyncPayload(payload)
-	if applicationPayload["customer"] != "safe" || applicationPayload[AsyncPayloadKey] != nil || link.CorrelationID != "corr-1" || link.OwnerExecutionID != "execution-1" || link.TraceID == "" || link.SpanID == "" {
+	if applicationPayload["customer"] != "safe" || applicationPayload[AsyncPayloadKey] != nil || link.OwnerExecutionID != "execution-1" || link.TraceID == "" || link.SpanID == "" {
 		t.Fatalf("application payload=%#v link=%+v", applicationPayload, link)
 	}
 	if _, stillPersisted := payload[AsyncPayloadKey]; !stillPersisted {

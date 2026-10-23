@@ -19,11 +19,11 @@ Workflow, or other product-domain behavior.
 - `mutation`: storage mutation conflicts, transient failures, and transaction metrics.
 - `modulehttp`: deployment-neutral, host-enforced HTTP Adapter declarations for in-process modules.
 - `moduleinfo`: normalized active-module capabilities, deployment topology, HTTP, and persistence ownership.
-- `requestcontext`: request, correlation, workspace, actor, execution, and trace identity.
+- `requestcontext`: the API request-ID alias of trace identity plus workspace, actor, execution, and OpenTelemetry span identity.
 - `ratelimit`: storage-neutral decisions and a bounded process-local limiter.
 - `safehttp`: outbound HTTP destination validation with DNS and redirect enforcement.
 - `secrets`: secret providers, key rings, envelope encryption, and redaction.
-- `telemetry`: OpenTelemetry setup, async trace links, and bounded SQL metrics.
+- `telemetry`: OpenTelemetry setup, HTTP/async trace propagation, and bounded SQL metrics.
 - `worker`: process lifecycle, durable worker contracts, retry, wakeup, and fair ordering.
 
 Application configuration, product branding, localization catalogs, product-domain

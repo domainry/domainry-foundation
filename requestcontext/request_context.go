@@ -11,17 +11,27 @@ import (
 )
 
 type requestIDKey struct{}
-type correlationIDKey struct{}
 type workspaceIDKey struct{}
 type actorIDKey struct{}
 type ownerExecutionIDKey struct{}
 
-// NewRequestID returns an opaque correlation ID suitable for logs and HTTP
-// propagation.
+// NewRequestID returns a valid 128-bit trace identity for code paths that do
+// not yet have an OpenTelemetry span. At an instrumented boundary RequestID
+// always resolves to the active trace ID instead.
 func NewRequestID() string {
 	random := make([]byte, 16)
 	_, _ = rand.Read(random)
-	return "req_" + hex.EncodeToString(random)
+	return hex.EncodeToString(random)
+}
+
+// NormalizeTraceID returns the canonical lowercase 128-bit trace identity or
+// an empty string when the caller supplied an invalid value.
+func NormalizeTraceID(value string) string {
+	traceID, err := trace.TraceIDFromHex(strings.TrimSpace(value))
+	if err != nil || !traceID.IsValid() {
+		return ""
+	}
+	return traceID.String()
 }
 
 func WithRequestID(ctx context.Context, requestID string) context.Context {
@@ -36,16 +46,21 @@ func RequestID(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
+	if traceID := TraceID(ctx); traceID != "" {
+		return traceID
+	}
 	requestID, _ := ctx.Value(requestIDKey{}).(string)
 	return strings.TrimSpace(requestID)
 }
 
-func WithCorrelationID(ctx context.Context, correlationID string) context.Context {
-	return withString(ctx, correlationIDKey{}, correlationID)
-}
-
-func CorrelationID(ctx context.Context) string {
-	return stringValue(ctx, correlationIDKey{})
+// RequestIDOrNew returns the active trace identity, or creates one when the
+// current execution has no valid trace identity yet. Business, execution, and
+// idempotency identifiers are deliberately not accepted as fallbacks.
+func RequestIDOrNew(ctx context.Context) string {
+	if requestID := NormalizeTraceID(RequestID(ctx)); requestID != "" {
+		return requestID
+	}
+	return NewRequestID()
 }
 
 func WithWorkspaceID(ctx context.Context, workspaceID string) context.Context {

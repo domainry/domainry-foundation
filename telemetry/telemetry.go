@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"fmt"
 	"os"
 	"strconv"
@@ -118,6 +119,7 @@ func Initialize(ctx context.Context, cfg Config) (Shutdown, error) {
 		provider := sdktrace.NewTracerProvider(
 			sdktrace.WithResource(res),
 			sdktrace.WithSampler(sdktrace.NeverSample()),
+			sdktrace.WithIDGenerator(contextTraceIDGenerator{}),
 		)
 		otel.SetTracerProvider(provider)
 		return provider.Shutdown, nil
@@ -156,9 +158,56 @@ func Initialize(ctx context.Context, cfg Config) (Shutdown, error) {
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))),
+		sdktrace.WithIDGenerator(contextTraceIDGenerator{}),
 	)
 	otel.SetTracerProvider(provider)
 	return provider.Shutdown, nil
+}
+
+// contextTraceIDGenerator lets an HTTP caller select the root trace ID through
+// X-Request-ID while retaining SDK-generated span IDs. Child spans always keep
+// the trace ID inherited from their parent context.
+type contextTraceIDGenerator struct{}
+
+func (contextTraceIDGenerator) NewIDs(ctx context.Context) (trace.TraceID, trace.SpanID) {
+	traceID, _ := ctx.Value(requestedTraceIDKey{}).(trace.TraceID)
+	if !traceID.IsValid() {
+		// Standalone/module boundaries may have already resolved X-Request-ID
+		// into requestcontext before the first local span is created. Reuse that
+		// value so a later client/use-case root span cannot silently fork the
+		// request into a different trace.
+		if normalized := requestcontext.NormalizeTraceID(requestcontext.RequestID(ctx)); normalized != "" {
+			traceID, _ = trace.TraceIDFromHex(normalized)
+		}
+	}
+	if !traceID.IsValid() {
+		traceID = newRandomTraceID()
+	}
+	return traceID, newRandomSpanID()
+}
+
+func (contextTraceIDGenerator) NewSpanID(context.Context, trace.TraceID) trace.SpanID {
+	return newRandomSpanID()
+}
+
+func newRandomTraceID() trace.TraceID {
+	for {
+		var value trace.TraceID
+		_, _ = cryptorand.Read(value[:])
+		if value.IsValid() {
+			return value
+		}
+	}
+}
+
+func newRandomSpanID() trace.SpanID {
+	for {
+		var value trace.SpanID
+		_, _ = cryptorand.Read(value[:])
+		if value.IsValid() {
+			return value
+		}
+	}
 }
 
 func cloneHeaders(source map[string]string) map[string]string {
@@ -175,14 +224,12 @@ type AsyncLink struct {
 	TraceID          string
 	SpanID           string
 	TraceFlags       byte
-	CorrelationID    string
 	OwnerExecutionID string
 }
 
-func CaptureAsyncLink(ctx context.Context, correlationID string) map[string]any {
+func CaptureAsyncLink(ctx context.Context) map[string]any {
 	spanContext := trace.SpanContextFromContext(ctx)
 	result := map[string]any{
-		"correlation_id":     normalizedCorrelationValue(correlationID),
 		"owner_execution_id": strings.TrimSpace(requestcontext.OwnerExecutionID(ctx)),
 	}
 	if spanContext.IsValid() {
@@ -201,20 +248,16 @@ func EnsureAsyncPayload(ctx context.Context, payload map[string]any) map[string]
 		values, validShape := persisted.(map[string]any)
 		if validShape {
 			link := ParseAsyncLink(values)
-			if link.CorrelationID != "" || (link.TraceID != "" && link.SpanID != "") {
+			if link.TraceID != "" && link.SpanID != "" {
 				return payload
 			}
 		}
 		delete(payload, AsyncPayloadKey)
 	}
-	correlationID := requestcontext.CorrelationID(ctx)
-	if correlationID == "" {
-		correlationID = requestcontext.RequestID(ctx)
-	}
-	if correlationID == "" && !trace.SpanContextFromContext(ctx).IsValid() {
+	if !trace.SpanContextFromContext(ctx).IsValid() {
 		return payload
 	}
-	payload[AsyncPayloadKey] = CaptureAsyncLink(ctx, correlationID)
+	payload[AsyncPayloadKey] = CaptureAsyncLink(ctx)
 	return payload
 }
 
@@ -243,7 +286,7 @@ func ConsumeAsyncPayload(payload map[string]any) (map[string]any, AsyncLink) {
 func ParseAsyncLink(values map[string]any) AsyncLink {
 	link := AsyncLink{
 		TraceID: asyncString(values["trace_id"]), SpanID: asyncString(values["span_id"]),
-		TraceFlags: asyncTraceFlags(values["trace_flags"]), CorrelationID: normalizedCorrelationValue(asyncString(values["correlation_id"])),
+		TraceFlags:       asyncTraceFlags(values["trace_flags"]),
 		OwnerExecutionID: asyncString(values["owner_execution_id"]),
 	}
 	traceID, traceErr := trace.TraceIDFromHex(link.TraceID)
@@ -263,19 +306,19 @@ func asyncString(value any) string {
 	return strings.TrimSpace(fmt.Sprint(value))
 }
 
-func StartLinkedSpan(ctx context.Context, tracerName, spanName string, link AsyncLink, options ...trace.SpanStartOption) (context.Context, trace.Span) {
+// StartAsyncSpan continues the producer trace for a single durable message.
+// Fan-in consumers must create their own span links for every input message.
+func StartAsyncSpan(ctx context.Context, tracerName, spanName string, link AsyncLink, options ...trace.SpanStartOption) (context.Context, trace.Span) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	ctx = requestcontext.WithCorrelationID(ctx, link.CorrelationID)
 	ctx = requestcontext.WithOwnerExecutionID(ctx, link.OwnerExecutionID)
 	if traceID, err := trace.TraceIDFromHex(link.TraceID); err == nil {
 		if spanID, spanErr := trace.SpanIDFromHex(link.SpanID); spanErr == nil {
 			spanContext := trace.NewSpanContext(trace.SpanContextConfig{TraceID: traceID, SpanID: spanID, TraceFlags: trace.TraceFlags(link.TraceFlags), Remote: true})
-			options = append(options, trace.WithLinks(trace.Link{SpanContext: spanContext}))
+			ctx = trace.ContextWithRemoteSpanContext(ctx, spanContext)
 		}
 	}
-	options = append(options, trace.WithNewRoot())
 	return otel.Tracer(strings.TrimSpace(tracerName)).Start(ctx, strings.TrimSpace(spanName), options...)
 }
 

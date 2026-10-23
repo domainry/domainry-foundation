@@ -7,15 +7,14 @@ import (
 )
 
 type TransactionObservation struct {
-	WorkspaceID   string
-	Scope         string
-	CorrelationID string
-	Duration      time.Duration
-	Attempts      int64
-	Conflicts     int64
-	Rollbacks     int64
-	Retries       int64
-	Succeeded     bool
+	WorkspaceID string
+	Scope       string
+	Duration    time.Duration
+	Attempts    int64
+	Conflicts   int64
+	Rollbacks   int64
+	Retries     int64
+	Succeeded   bool
 }
 
 type TransactionMetricsSnapshot struct {

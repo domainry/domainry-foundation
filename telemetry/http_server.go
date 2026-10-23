@@ -18,6 +18,8 @@ import (
 	"go.uber.org/zap"
 )
 
+// RequestIDHeader accepts or exposes the active trace ID. Callers may select
+// the root trace ID; when absent the process generates it.
 const RequestIDHeader = "X-Request-ID"
 
 // HTTPServerObservation is the bounded, payload-free terminal observation of
@@ -203,26 +205,25 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		started := time.Now()
-		// Request identity is local to this process boundary. An upstream request
-		// ID must never be reused across a service hop; correlation_id and W3C
-		// trace context are the cross-process identities.
-		requestID := requestcontext.NewRequestID()
-		correlationID := normalizedCorrelationValue(request.Header.Get(CorrelationIDHeader))
-		if correlationID == "" {
-			correlationID = requestID
-		}
-
 		routeState := &httpRouteState{}
 		ctx := context.WithValue(ExtractHTTPContext(request.Context(), request.Header), httpRouteStateKey{}, routeState)
-		ctx = requestcontext.WithRequestID(ctx, requestID)
-		ctx = requestcontext.WithCorrelationID(ctx, correlationID)
 		ctx = requestcontext.WithWorkspaceID(ctx, strings.TrimSpace(request.Header.Get("X-Workspace-ID")))
 		ctx = requestcontext.WithActorID(ctx, strings.TrimSpace(request.Header.Get("X-User-ID")))
 		ctx, span := StartHTTPServerSpan(ctx, nil, config.TracerName, "HTTP "+request.Method, request.Method)
 		defer span.End()
+		// request_id is the public/API spelling of the active trace_id. It is not
+		// a second generated identity. W3C trace context carries the same trace
+		// across Domainry service hops; legacy providers translate it at adapters.
+		requestID := requestcontext.RequestID(ctx)
+		if requestID == "" {
+			requestID = requestcontext.NormalizeTraceID(request.Header.Get(RequestIDHeader))
+			if requestID == "" {
+				requestID = requestcontext.NewRequestID()
+			}
+			ctx = requestcontext.WithRequestID(ctx, requestID)
+		}
 		request = request.WithContext(ctx)
 		writer.Header().Set(RequestIDHeader, requestID)
-		writer.Header().Set(CorrelationIDHeader, correlationID)
 		recorder := &httpStatusRecorder{ResponseWriter: writer, status: http.StatusOK}
 
 		func() {

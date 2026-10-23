@@ -394,20 +394,20 @@ func TestNewSupportsProcessOwnedOutputSelection(t *testing.T) {
 	}
 }
 
-func TestFromContextAddsRequestID(t *testing.T) {
+func TestFromContextLogsRequestAliasAsTraceID(t *testing.T) {
 	core, observed := observer.New(zapcore.InfoLevel)
 	previous := zap.L()
 	zap.ReplaceGlobals(zap.New(core))
 	defer zap.ReplaceGlobals(previous)
 
-	ctx := requestcontext.WithRequestID(context.Background(), "req-123")
-	ctx = requestcontext.WithCorrelationID(ctx, "corr-123")
+	const traceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	ctx := requestcontext.WithRequestID(context.Background(), traceID)
 	ctx = requestcontext.WithWorkspaceID(ctx, "workspace-a")
 	ctx = requestcontext.WithActorID(ctx, "user-a")
 	FromContext(ctx).Info("handled")
 	entries := observed.All()
 	fields := entries[0].ContextMap()
-	if len(entries) != 1 || fields["request_id"] != "req-123" || fields["correlation_id"] != "corr-123" || fields["workspace_id"] != "workspace-a" || fields["actor_id"] != "user-a" {
+	if len(entries) != 1 || fields["trace_id"] != traceID || fields["request_id"] != nil || fields["correlation_id"] != nil || fields["workspace_id"] != "workspace-a" || fields["actor_id"] != "user-a" {
 		t.Fatalf("entries = %#v", entries)
 	}
 }
@@ -428,7 +428,7 @@ func TestHostedModuleChildrenShareProcessSink(t *testing.T) {
 	}
 	for index, owner := range []string{"identity", "notification"} {
 		fields := entries[index].ContextMap()
-		if fields["owner"] != owner || fields["request_id"] != "req-"+owner {
+		if fields["owner"] != owner || fields["trace_id"] != "req-"+owner || fields["request_id"] != nil {
 			t.Fatalf("entry %d fields=%#v", index, fields)
 		}
 	}
@@ -450,7 +450,7 @@ func TestRecordFailureUsesStableEventAndNeverRawErrorText(t *testing.T) {
 	}
 	for _, entry := range entries {
 		fields := entry.ContextMap()
-		if fields["request_id"] != "req-secondary" || fields["error_code"] != "backend.internal" || strings.Contains(fmt.Sprint(fields), "private") {
+		if fields["trace_id"] != "req-secondary" || fields["request_id"] != nil || fields["error_code"] != "backend.internal" || strings.Contains(fmt.Sprint(fields), "private") {
 			t.Fatalf("fields=%#v", fields)
 		}
 	}

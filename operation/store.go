@@ -15,7 +15,7 @@ import (
 var operationColumns = []string{
 	"id", "operation_id", "workspace_id", "system_purpose", "owner", "kind", "action_key", "parent_operation_id", "resource_type", "resource_id",
 	"idempotency_key", "request_fingerprint", "requested_by", "reason", "reference", "status", "status_url", "result_json", "metadata_json",
-	"error_code", "failure_class", "next_action", "related_ids_json", "correlation", "evidence_json", "lease_owner", "lease_expires_at",
+	"error_code", "failure_class", "next_action", "related_ids_json", "evidence_json", "lease_owner", "lease_expires_at",
 	"fencing_token", "expires_at", "created_at", "started_at", "finished_at", "updated_at",
 }
 
@@ -422,7 +422,7 @@ func operationValues(value ManagedOperation, startedAt, finishedAt, expiresAt st
 	return []any{
 		command.ID, command.OperationID, command.Scope.WorkspaceID, command.Scope.SystemPurpose, command.Owner, command.Kind, command.ActionKey, "", command.Scope.ResourceType, command.Scope.ResourceID,
 		command.IdempotencyKey, command.RequestFingerprint, command.RequestedBy, command.Reason, command.Reference, value.Status, command.StatusURL,
-		string(value.Result), string(value.Metadata), value.ErrorCode, "", value.NextAction, `[]`, "", `[]`, value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt),
+		string(value.Result), string(value.Metadata), value.ErrorCode, "", value.NextAction, `[]`, `[]`, value.LeaseOwner, mustOperationTimestampMillis(value.LeaseExpiresAt),
 		value.FencingToken, mustOperationTimestampMillis(expiresAt), command.CreatedAt.UTC().UnixMilli(), mustOperationTimestampMillis(startedAt), mustOperationTimestampMillis(finishedAt), value.UpdatedAt.UTC().UnixMilli(),
 	}
 }
@@ -431,14 +431,14 @@ type scanner interface{ Scan(...any) error }
 
 func scanOperation(row scanner) (ManagedOperation, error) {
 	var value ManagedOperation
-	var workspaceID, systemPurpose, parentID, status, resultJSON, metadataJSON, failureClass, relatedIDs, correlation, evidence string
+	var workspaceID, systemPurpose, parentID, status, resultJSON, metadataJSON, failureClass, relatedIDs, evidence string
 	var nextAction string
 	var leaseExpiresAt, expiresAt, createdAt, startedAt, finishedAt, updatedAt int64
 	command := &value.Command
 	err := row.Scan(
 		&command.ID, &command.OperationID, &workspaceID, &systemPurpose, &command.Owner, &command.Kind, &command.ActionKey, &parentID, &command.Scope.ResourceType, &command.Scope.ResourceID,
 		&command.IdempotencyKey, &command.RequestFingerprint, &command.RequestedBy, &command.Reason, &command.Reference, &status, &command.StatusURL,
-		&resultJSON, &metadataJSON, &value.ErrorCode, &failureClass, &nextAction, &relatedIDs, &correlation, &evidence, &value.LeaseOwner,
+		&resultJSON, &metadataJSON, &value.ErrorCode, &failureClass, &nextAction, &relatedIDs, &evidence, &value.LeaseOwner,
 		&leaseExpiresAt, &value.FencingToken, &expiresAt, &createdAt, &startedAt, &finishedAt, &updatedAt,
 	)
 	if err != nil {

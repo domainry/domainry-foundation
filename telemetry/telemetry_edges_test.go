@@ -126,9 +126,8 @@ func TestTelemetryHeaderAsyncAndUseCaseFallbackEdges(t *testing.T) {
 	}
 	requestContext := requestcontext.WithRequestID(t.Context(), "request-1")
 	payload := EnsureAsyncPayload(requestContext, nil)
-	link := payload[AsyncPayloadKey].(map[string]any)
-	if link["correlation_id"] != "request-1" {
-		t.Fatalf("request fallback link=%v", link)
+	if len(payload) != 0 {
+		t.Fatalf("request identity leaked into async payload=%v", payload)
 	}
 	EndUseCase(nil, errors.New("ignored"), "")
 	_, success := StartUseCase(t.Context(), " success ")
@@ -188,12 +187,12 @@ func TestEnsureAsyncPayloadWithTraceOnlyAndInvalidLink(t *testing.T) {
 		t.Fatalf("trace-only payload=%v", payload)
 	}
 
-	_, span := StartLinkedSpan(t.Context(), "test", "invalid-link", AsyncLink{
+	_, span := StartAsyncSpan(t.Context(), "test", "invalid-link", AsyncLink{
 		TraceID: traceID.String(),
 		SpanID:  "invalid",
 	})
 	span.End()
-	_, span = StartLinkedSpan(t.Context(), "test", "invalid-trace", AsyncLink{
+	_, span = StartAsyncSpan(t.Context(), "test", "invalid-trace", AsyncLink{
 		TraceID: "invalid",
 		SpanID:  spanID.String(),
 	})

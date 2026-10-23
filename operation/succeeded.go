@@ -50,7 +50,6 @@ type SucceededRecord struct {
 	MetadataJSON       json.RawMessage
 	RelatedIDsJSON     json.RawMessage
 	EvidenceJSON       json.RawMessage
-	Correlation        string
 	CompletedAt        string
 }
 
@@ -146,7 +145,7 @@ func InsertSucceeded(ctx context.Context, execer Execer, renderer ormdialect.Ren
 		Values(operationRecordValues(
 			value.OperationID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
 			value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, StatusSucceeded, "",
-			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON), value.Correlation,
+			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON),
 			string(value.EvidenceJSON), "", int64(0), 0, int64(0), completedAt, completedAt, completedAt, completedAt,
 		)...).Build()
 	if err != nil {

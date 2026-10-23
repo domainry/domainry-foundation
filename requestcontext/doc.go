@@ -1,3 +1,3 @@
-// Package requestcontext carries request, correlation, workspace, actor,
-// execution, and trace identities through context.Context.
+// Package requestcontext carries the API request-ID alias of the active trace,
+// workspace, actor, execution, and OpenTelemetry span identity through context.Context.
 package requestcontext

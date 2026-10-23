@@ -119,7 +119,7 @@ func InsertStarted(ctx context.Context, execer Execer, renderer ormdialect.Rende
 		Values(operationRecordValues(
 			value.OperationID, "", value.Owner, value.Kind, value.ActionKey, "", value.ResourceType, value.ResourceID,
 			value.IdempotencyKey, value.RequestFingerprint, value.RequestedBy, value.Reason, value.Reference, StatusStarted, "",
-			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON), "",
+			string(value.ResultJSON), string(value.MetadataJSON), "", "", "", string(value.RelatedIDsJSON),
 			string(value.EvidenceJSON), value.LeaseOwner, leaseExpiresAt, value.FencingToken, expiresAt,
 			createdAt, createdAt, int64(0), updatedAt,
 		)...).Build()
