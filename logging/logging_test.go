@@ -79,7 +79,7 @@ func TestNewRejectsInvalidFileLoggingEnvironment(t *testing.T) {
 	}
 }
 
-func TestFileLoggingRoutesApplicationAndAccessBeforeEncoding(t *testing.T) {
+func TestFileLoggingRoutesApplicationAccessAndInfrastructureBeforeEncoding(t *testing.T) {
 	directory := t.TempDir()
 	logger, err := New(Config{
 		ServiceName: "stock/runtime", DisableConsole: true, FileDirectory: directory,
@@ -95,6 +95,8 @@ func TestFileLoggingRoutesApplicationAndAccessBeforeEncoding(t *testing.T) {
 	logger.Error("worker_failed", zap.String("error_code", "backend.worker.failed"))
 	AccessLogger(t.Context()).Info("http_request", zap.Int("status", 200))
 	AccessLogger(t.Context()).Error("http_request", zap.Int("status", 500))
+	InfrastructureLogger(t.Context()).Info("dependency_call", zap.String("dependency_kind", "sql"))
+	InfrastructureLogger(t.Context()).Error("dependency_call", zap.String("dependency_kind", "redis"))
 	if err := Sync(logger); err != nil {
 		t.Fatal(err)
 	}
@@ -107,15 +109,22 @@ func TestFileLoggingRoutesApplicationAndAccessBeforeEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text := string(application); !strings.Contains(text, `"msg":"process_started"`) || !strings.Contains(text, `"msg":"worker_failed"`) || !strings.Contains(text, `"log_type":"application"`) || strings.Contains(text, `"msg":"http_request"`) {
+	infrastructure, err := os.ReadFile(filepath.Join(directory, "stock_runtime.infrastructure."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(application); !strings.Contains(text, `"msg":"process_started"`) || !strings.Contains(text, `"msg":"worker_failed"`) || !strings.Contains(text, `"log_type":"application"`) || strings.Contains(text, `"msg":"http_request"`) || strings.Contains(text, `"msg":"dependency_call"`) {
 		t.Fatalf("application log=%s", text)
 	}
-	if text := string(access); strings.Count(text, `"msg":"http_request"`) != 2 || !strings.Contains(text, `"status":200`) || !strings.Contains(text, `"status":500`) || !strings.Contains(text, `"log_type":"access"`) || strings.Contains(text, `"msg":"worker_failed"`) {
+	if text := string(access); strings.Count(text, `"msg":"http_request"`) != 2 || !strings.Contains(text, `"status":200`) || !strings.Contains(text, `"status":500`) || !strings.Contains(text, `"log_type":"access"`) || strings.Contains(text, `"msg":"worker_failed"`) || strings.Contains(text, `"msg":"dependency_call"`) {
 		t.Fatalf("access log=%s", text)
+	}
+	if text := string(infrastructure); strings.Count(text, `"msg":"dependency_call"`) != 2 || !strings.Contains(text, `"dependency_kind":"sql"`) || !strings.Contains(text, `"dependency_kind":"redis"`) || !strings.Contains(text, `"log_type":"infrastructure"`) || strings.Contains(text, `"msg":"worker_failed"`) || strings.Contains(text, `"msg":"http_request"`) {
+		t.Fatalf("infrastructure log=%s", text)
 	}
 }
 
-func TestAccessLoggingIsNotFilteredByApplicationLevel(t *testing.T) {
+func TestBoundaryLoggingIsNotFilteredByApplicationLevel(t *testing.T) {
 	directory := t.TempDir()
 	logger, err := New(Config{
 		ServiceName: "stock-runtime", Level: "error", DisableConsole: true, FileDirectory: directory,
@@ -129,6 +138,7 @@ func TestAccessLoggingIsNotFilteredByApplicationLevel(t *testing.T) {
 	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
 	logger.Info("application_info")
 	AccessLogger(t.Context()).Info("http_request", zap.Int("status", 200))
+	InfrastructureLogger(t.Context()).Info("dependency_call", zap.String("dependency_kind", "sql"))
 	if err := Sync(logger); err != nil {
 		t.Fatal(err)
 	}
@@ -143,9 +153,16 @@ func TestAccessLoggingIsNotFilteredByApplicationLevel(t *testing.T) {
 	if !strings.Contains(string(access), `"msg":"http_request"`) {
 		t.Fatalf("access log=%s", access)
 	}
+	infrastructure, err := os.ReadFile(filepath.Join(directory, "stock-runtime.infrastructure."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(infrastructure), `"msg":"dependency_call"`) {
+		t.Fatalf("infrastructure log=%s", infrastructure)
+	}
 }
 
-func TestAccessLoggingIsNeverSampled(t *testing.T) {
+func TestBoundaryLoggingIsNeverSampled(t *testing.T) {
 	directory := t.TempDir()
 	logger, err := New(Config{
 		ServiceName: "stock-runtime", DisableConsole: true, FileDirectory: directory,
@@ -160,6 +177,7 @@ func TestAccessLoggingIsNeverSampled(t *testing.T) {
 	t.Cleanup(func() { zap.ReplaceGlobals(previous) })
 	for index := 0; index < 250; index++ {
 		AccessLogger(t.Context()).Info("http_request", zap.Int("status", 200))
+		InfrastructureLogger(t.Context()).Info("dependency_call", zap.String("dependency_kind", "sql"))
 	}
 	if err := Sync(logger); err != nil {
 		t.Fatal(err)
@@ -171,6 +189,13 @@ func TestAccessLoggingIsNeverSampled(t *testing.T) {
 	}
 	if count := strings.Count(string(access), `"msg":"http_request"`); count != 250 {
 		t.Fatalf("access events=%d want=250", count)
+	}
+	infrastructure, err := os.ReadFile(filepath.Join(directory, "stock-runtime.infrastructure."+day+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(string(infrastructure), `"msg":"dependency_call"`); count != 250 {
+		t.Fatalf("infrastructure events=%d want=250", count)
 	}
 }
 
@@ -232,8 +257,9 @@ func TestRollingFileSinkRotatesByUTCDateAndSizeAndCompressesArchives(t *testing.
 func TestArchiveMaintenanceRemovesExpiredFiles(t *testing.T) {
 	directory := t.TempDir()
 	for name := range map[string]bool{
-		"stock-runtime.application.2026-10-01.log": true,
-		"stock-runtime.access.2026-10-20.log":      true,
+		"stock-runtime.application.2026-10-01.log":    true,
+		"stock-runtime.access.2026-10-20.log":         true,
+		"stock-runtime.infrastructure.2026-10-20.log": true,
 	} {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte("record\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -251,6 +277,9 @@ func TestArchiveMaintenanceRemovesExpiredFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(directory, "stock-runtime.access.2026-10-20.log.gz")); err != nil {
 		t.Fatalf("retained archive was not compressed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stock-runtime.infrastructure.2026-10-20.log.gz")); err != nil {
+		t.Fatalf("retained infrastructure archive was not compressed: %v", err)
 	}
 }
 

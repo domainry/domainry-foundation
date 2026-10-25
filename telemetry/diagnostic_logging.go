@@ -73,8 +73,8 @@ func init() {
 	activeDiagnosticPolicy.Store(snapshot)
 }
 
-// DefaultDiagnosticLogPolicy records every supported boundary and SQL
-// statement template. HTTP content remains opt-in until a process or generated
+// DefaultDiagnosticLogPolicy records every supported boundary and executable
+// SQL statement. HTTP content remains opt-in until a process or generated
 // product explicitly enables its bounded, redacted capture.
 func DefaultDiagnosticLogPolicy() DiagnosticLogPolicy {
 	return DiagnosticLogPolicy{
@@ -345,7 +345,7 @@ func RecordDependencyCall(ctx context.Context, call DependencyCall, result Depen
 		"input":           call.Input,
 		"output":          result.Output,
 	})
-	logger := logging.FromContext(ctx)
+	logger := logging.InfrastructureLogger(ctx)
 	if result.Err != nil {
 		fields = append(fields, zap.String("error_kind", dependencyErrorKind(result.Err)), zap.String("error_code", "dependency.call_failed"))
 		logger.Error("dependency_call", fields...)

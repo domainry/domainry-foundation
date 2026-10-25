@@ -60,14 +60,16 @@ func (telemetryLegacyStmt) Query([]driver.Value) (driver.Rows, error) {
 }
 
 type telemetryConn struct {
-	err      error
-	tx       *telemetryTx
-	valid    bool
-	checked  bool
-	reset    bool
-	pinged   bool
-	executed bool
-	queried  bool
+	err       error
+	tx        *telemetryTx
+	valid     bool
+	checked   bool
+	reset     bool
+	pinged    bool
+	executed  bool
+	queried   bool
+	lastQuery string
+	lastArgs  []driver.NamedValue
 }
 
 func (c *telemetryConn) Prepare(string) (driver.Stmt, error) {
@@ -92,8 +94,10 @@ func (c *telemetryConn) PrepareContext(context.Context, string) (driver.Stmt, er
 func (c *telemetryConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
 	return c.Begin()
 }
-func (c *telemetryConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+func (c *telemetryConn) ExecContext(_ context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	c.executed = true
+	c.lastQuery = query
+	c.lastArgs = append([]driver.NamedValue(nil), args...)
 	return telemetryResult(1), c.err
 }
 func (c *telemetryConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {

@@ -113,7 +113,7 @@ func buildLogger(config Config, zapConfig zap.Config) (*zap.Logger, error) {
 	if err != nil {
 		return nil, err
 	}
-	cores := make([]zapcore.Core, 0, 6)
+	cores := make([]zapcore.Core, 0, 9)
 	if !config.DisableConsole {
 		consoleSink, closeConsole, openErr := zap.Open(zapConfig.OutputPaths...)
 		if openErr != nil {
@@ -133,9 +133,11 @@ func buildLogger(config Config, zapConfig zap.Config) (*zap.Logger, error) {
 		}
 		applicationSink := &rollingFileSink{manager: manager, logType: LogTypeApplication}
 		accessSink := &rollingFileSink{manager: manager, logType: LogTypeAccess}
+		infrastructureSink := &rollingFileSink{manager: manager, logType: LogTypeInfrastructure}
 		fileEncoder := zapcore.NewJSONEncoder(zapConfig.EncoderConfig)
 		cores = append(cores, routedApplicationCores(fileEncoder, zapcore.AddSync(applicationSink), zapConfig)...)
-		cores = append(cores, newRoutedCore(zapcore.NewCore(fileEncoder.Clone(), zapcore.AddSync(accessSink), zap.LevelEnablerFunc(accessLevelEnabler)), LogTypeAccess))
+		cores = append(cores, newRoutedCore(zapcore.NewCore(fileEncoder.Clone(), zapcore.AddSync(accessSink), zap.LevelEnablerFunc(boundaryLevelEnabler)), LogTypeAccess))
+		cores = append(cores, newRoutedCore(zapcore.NewCore(fileEncoder.Clone(), zapcore.AddSync(infrastructureSink), zap.LevelEnablerFunc(boundaryLevelEnabler)), LogTypeInfrastructure))
 	}
 	if len(cores) == 0 {
 		return nil, errors.New("logging has no configured output")
@@ -169,7 +171,8 @@ func buildLogger(config Config, zapConfig zap.Config) (*zap.Logger, error) {
 
 func routedOutputCores(encoder zapcore.Encoder, sink zapcore.WriteSyncer, config zap.Config) []zapcore.Core {
 	cores := routedApplicationCores(encoder, sink, config)
-	return append(cores, newRoutedCore(zapcore.NewCore(encoder.Clone(), sink, zap.LevelEnablerFunc(accessLevelEnabler)), LogTypeAccess))
+	cores = append(cores, newRoutedCore(zapcore.NewCore(encoder.Clone(), sink, zap.LevelEnablerFunc(boundaryLevelEnabler)), LogTypeAccess))
+	return append(cores, newRoutedCore(zapcore.NewCore(encoder.Clone(), sink, zap.LevelEnablerFunc(boundaryLevelEnabler)), LogTypeInfrastructure))
 }
 
 func routedApplicationCores(encoder zapcore.Encoder, sink zapcore.WriteSyncer, config zap.Config) []zapcore.Core {
@@ -185,7 +188,7 @@ func routedApplicationCores(encoder zapcore.Encoder, sink zapcore.WriteSyncer, c
 	return []zapcore.Core{applicationBelowError, applicationError}
 }
 
-func accessLevelEnabler(level zapcore.Level) bool {
+func boundaryLevelEnabler(level zapcore.Level) bool {
 	return level >= zapcore.DebugLevel
 }
 
@@ -227,8 +230,16 @@ func (core *routedCore) Sync() error {
 func classifiedLogType(fields []zapcore.Field) string {
 	for index := len(fields) - 1; index >= 0; index-- {
 		field := fields[index]
-		if field.Key == LogTypeField && field.Type == zapcore.StringType && field.String == LogTypeAccess {
+		if field.Key != LogTypeField || field.Type != zapcore.StringType {
+			continue
+		}
+		switch field.String {
+		case LogTypeAccess:
 			return LogTypeAccess
+		case LogTypeInfrastructure:
+			return LogTypeInfrastructure
+		default:
+			return LogTypeApplication
 		}
 	}
 	return LogTypeApplication
@@ -241,7 +252,7 @@ func newArchiveManager(config fileArchiveConfig, now func() time.Time) (*archive
 	manager := &archiveManager{
 		config: config,
 		now:    now,
-		match:  regexp.MustCompile(`^` + regexp.QuoteMeta(config.serviceName) + `\.(application|access)\.(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log(?:\.gz|\.gz\.tmp)?$`),
+		match:  regexp.MustCompile(`^` + regexp.QuoteMeta(config.serviceName) + `\.(application|access|infrastructure)\.(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log(?:\.gz|\.gz\.tmp)?$`),
 		active: make(map[string]bool),
 	}
 	if err := manager.maintain(); err != nil {

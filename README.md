@@ -15,7 +15,7 @@ Workflow, or other product-domain behavior.
 - `filelock`: cross-platform process file locking.
 - `health`: bounded technical check evaluation and diagnostic history.
 - `idempotency`: fingerprints, receipt decisions, audit-safe facts, and bounded metrics.
-- `logging`: one structured Zap root logger with stable error/request fields and optional application/access archives.
+- `logging`: one structured Zap root logger with stable error/request fields and separate application/access/infrastructure archives.
 - `mutation`: storage mutation conflicts, transient failures, and transaction metrics.
 - `modulehttp`: deployment-neutral, host-enforced HTTP Adapter declarations for in-process modules.
 - `moduleinfo`: normalized active-module capabilities, deployment topology, HTTP, and persistence ownership.
@@ -42,10 +42,16 @@ outbound HTTP, SQL, and infrastructure adapters. `LOG_DIAGNOSTIC_ENABLED` and
 `LOG_DIAGNOSTIC_POLICY_FILE` to a complete JSON policy enables atomic hot reload
 without rebuilding routers, clients, or database pools.
 
+File logging routes ordinary process and business events to `application`,
+inbound `http_request` events to `access`, and every `dependency_call` emitted
+by outbound HTTP, SQL, or another infrastructure adapter to `infrastructure`.
+
 HTTP content is limited to JSON and passes through recursive secret-key redaction.
-SQL events contain the executed statement text and argument types, never argument
-values. Adapter-specific instrumentation may permanently disable content capture for
-identity or credential boundaries even when the process policy enables it.
+When `LOG_SQL_STATEMENT` is enabled, SQL events contain a bounded, directly
+executable statement with driver arguments rendered as escaped SQL literals, plus
+argument types. Disable that switch when parameter values must not enter diagnostic
+logs. Adapter-specific instrumentation may permanently disable HTTP content capture
+for identity or credential boundaries even when the process policy enables it.
 
 ## Development
 

@@ -27,9 +27,10 @@ const (
 	defaultFileRetentionDays  = 30
 	defaultFileMaxTotalSizeMB = 2048
 
-	LogTypeField       = "log_type"
-	LogTypeApplication = "application"
-	LogTypeAccess      = "access"
+	LogTypeField          = "log_type"
+	LogTypeApplication    = "application"
+	LogTypeAccess         = "access"
+	LogTypeInfrastructure = "infrastructure"
 )
 
 // Config is the complete process-owned logging contract. A hosted module must
@@ -341,6 +342,14 @@ func FromContext(ctx context.Context) *zap.Logger {
 // independent description of the request outcome.
 func AccessLogger(ctx context.Context) *zap.Logger {
 	return FromContext(ctx).With(zap.String(LogTypeField, LogTypeAccess))
+}
+
+// InfrastructureLogger derives the external-resource diagnostic stream from
+// the one process-owned root logger. Dependency boundaries use this logger so
+// SQL, outbound HTTP, Redis, object-store, SMTP, MQTT, filesystem, process and
+// scanner events never mix with application events.
+func InfrastructureLogger(ctx context.Context) *zap.Logger {
+	return FromContext(ctx).With(zap.String(LogTypeField, LogTypeInfrastructure))
 }
 
 // Fields converts a dynamic field map into deterministic zap fields.

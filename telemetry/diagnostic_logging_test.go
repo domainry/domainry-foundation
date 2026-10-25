@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/domainry/domainry-foundation/logging"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -99,6 +100,9 @@ func TestHTTPClientDiagnosticContentCompletesWhenBodyCloses(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("events=%#v", observed.All())
 	}
+	if entries[0].ContextMap()[logging.LogTypeField] != logging.LogTypeInfrastructure {
+		t.Fatalf("dependency log type=%v", entries[0].ContextMap()[logging.LogTypeField])
+	}
 	diagnostic := toJSON(entries[0].ContextMap())
 	if strings.Contains(diagnostic, "hidden") || !strings.Contains(diagnostic, "visible") || !strings.Contains(diagnostic, "201") {
 		t.Fatalf("unexpected diagnostic event: %s", diagnostic)
@@ -140,6 +144,9 @@ func TestHTTPClientAdapterCanPermanentlyDisableDiagnosticContent(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("events=%#v", observed.All())
 	}
+	if entries[0].ContextMap()[logging.LogTypeField] != logging.LogTypeInfrastructure {
+		t.Fatalf("dependency log type=%v", entries[0].ContextMap()[logging.LogTypeField])
+	}
 	diagnostic := toJSON(entries[0].ContextMap())
 	if strings.Contains(diagnostic, "must-not-appear") || !strings.Contains(diagnostic, "identity.lookup") || !strings.Contains(diagnostic, "200") {
 		t.Fatalf("unexpected metadata-only diagnostic event: %s", diagnostic)
@@ -175,7 +182,7 @@ func TestDiagnosticPolicyFileCanBeReloadedWithoutReinstallingObservers(t *testin
 	}
 }
 
-func TestObservedSQLLogsStatementAndResultWithoutArgumentValues(t *testing.T) {
+func TestObservedSQLLogsExecutableStatementAndResult(t *testing.T) {
 	restoreDiagnosticPolicy(t)
 	if err := ConfigureDiagnosticLogging(DiagnosticLogPolicy{
 		Enabled: true, Features: []string{DiagnosticFeatureSQL}, SQLStatement: true, MaxContentBytes: 2048,
@@ -192,18 +199,23 @@ func TestObservedSQLLogsStatementAndResultWithoutArgumentValues(t *testing.T) {
 	if _, err := connection.ExecContext(t.Context(), query, []driver.NamedValue{{Ordinal: 1, Value: "visible-name"}, {Ordinal: 2, Value: "secret-id"}}); err != nil {
 		t.Fatal(err)
 	}
+	if base.lastQuery != query || len(base.lastArgs) != 2 || base.lastArgs[0].Value != "visible-name" || base.lastArgs[1].Value != "secret-id" {
+		t.Fatalf("underlying execution changed query=%q args=%#v", base.lastQuery, base.lastArgs)
+	}
 	entries := observed.FilterMessage("dependency_call").All()
 	if len(entries) != 1 {
 		t.Fatalf("events=%#v", observed.All())
 	}
+	if entries[0].ContextMap()[logging.LogTypeField] != logging.LogTypeInfrastructure {
+		t.Fatalf("dependency log type=%v", entries[0].ContextMap()[logging.LogTypeField])
+	}
 	diagnostic := toJSON(entries[0].ContextMap())
-	if !strings.Contains(diagnostic, query) || !strings.Contains(diagnostic, "rows_affected") {
+	executable := `UPDATE accounts SET display_name = 'visible-name' WHERE id = 'secret-id'`
+	if !strings.Contains(diagnostic, executable) || !strings.Contains(diagnostic, "rows_affected") {
 		t.Fatalf("SQL statement/result missing: %s", diagnostic)
 	}
-	for _, forbidden := range []string{"visible-name", "secret-id"} {
-		if strings.Contains(diagnostic, forbidden) {
-			t.Fatalf("SQL argument leaked: %s", diagnostic)
-		}
+	if strings.Contains(diagnostic, query) {
+		t.Fatalf("SQL template was logged instead of executable SQL: %s", diagnostic)
 	}
 }
 
