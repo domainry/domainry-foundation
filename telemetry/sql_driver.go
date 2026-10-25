@@ -11,13 +11,25 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 var observedSQLDriverSequence atomic.Uint64
 
+var observedSQLDriverRegistry = struct {
+	sync.Mutex
+	names map[string]string
+}{names: map[string]string{}}
+
 func OpenObservedSQL(driverName, dataSourceName, role string, metrics *SQLMetrics) (*sql.DB, error) {
+	registryKey := strings.TrimSpace(driverName) + "\x00" + boundedSQLRole(role) + "\x00" + fmt.Sprintf("%p", metrics)
+	observedSQLDriverRegistry.Lock()
+	defer observedSQLDriverRegistry.Unlock()
+	if name := observedSQLDriverRegistry.names[registryKey]; name != "" {
+		return sql.Open(name, dataSourceName)
+	}
 	probe, err := sql.Open(driverName, dataSourceName)
 	if err != nil {
 		return nil, err
@@ -26,6 +38,7 @@ func OpenObservedSQL(driverName, dataSourceName, role string, metrics *SQLMetric
 	_ = probe.Close()
 	name := fmt.Sprintf("domainry_observed_%s_%d", driverName, observedSQLDriverSequence.Add(1))
 	sql.Register(name, observedDriver{driver: underlying, role: role, metrics: metrics})
+	observedSQLDriverRegistry.names[registryKey] = name
 	return sql.Open(name, dataSourceName)
 }
 

@@ -69,6 +69,25 @@ func TestSQLMetricsClassifyDeadlockWithoutExportingErrorText(t *testing.T) {
 	}
 }
 
+func TestOpenObservedSQLReusesRegisteredWrapper(t *testing.T) {
+	const driverName = "domainry_foundation_observed_registry_test"
+	sql.Register(driverName, telemetryDriver{conn: &telemetryConn{valid: true}})
+	before := observedSQLDriverSequence.Load()
+	first, err := OpenObservedSQL(driverName, "first", "connector", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	second, err := OpenObservedSQL(driverName, "second", "connector", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if created := observedSQLDriverSequence.Load() - before; created != 1 {
+		t.Fatalf("registered wrappers = %d, want 1", created)
+	}
+}
+
 type fakeSQLError string
 
 func (e fakeSQLError) Error() string { return string(e) }
