@@ -99,9 +99,9 @@ func TestInstrumentHTTPClientPropagatesOneTraceIdentity(t *testing.T) {
 	if clientSpan.SpanContext().TraceID() != serverSpan.SpanContext().TraceID() || serverSpan.Parent().SpanID() != clientSpan.SpanContext().SpanID() {
 		t.Fatalf("trace parent mismatch client=%v server=%v server_parent=%v", clientSpan.SpanContext(), serverSpan.SpanContext(), serverSpan.Parent())
 	}
-	logs := observedLogs.All()
+	logs := observedLogs.FilterMessage("saas_request").All()
 	if len(logs) != 1 || logs[0].ContextMap()["trace_id"] != serverSpan.SpanContext().TraceID().String() || logs[0].ContextMap()["span_id"] != serverSpan.SpanContext().SpanID().String() || logs[0].ContextMap()["correlation_id"] != nil {
-		t.Fatalf("server logs=%#v", logs)
+		t.Fatalf("server logs=%#v all=%#v", logs, observedLogs.All())
 	}
 }
 

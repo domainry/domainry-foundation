@@ -2,9 +2,12 @@ package telemetry
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.opentelemetry.io/otel"
@@ -86,8 +89,9 @@ func StartHTTPServerSpan(ctx context.Context, header http.Header, tracerName, op
 // HTTPTransport creates one client span for every real network attempt. A
 // retry therefore receives a fresh span and fresh injected parent identity.
 type HTTPTransport struct {
-	Base       http.RoundTripper
-	TracerName string
+	Base                     http.RoundTripper
+	TracerName               string
+	DisableDiagnosticContent bool
 }
 
 func (transport HTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -117,6 +121,7 @@ func (transport HTTPTransport) RoundTrip(request *http.Request) (*http.Response,
 			attributes = append(attributes, attribute.Int("server.port", port))
 		}
 	}
+	started := time.Now()
 	ctx, span := otel.Tracer(tracerName).Start(request.Context(), operation,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attributes...),
@@ -126,9 +131,51 @@ func (transport HTTPTransport) RoundTrip(request *http.Request) (*http.Response,
 	clone := request.Clone(ctx)
 	clone.Header = request.Header.Clone()
 	InjectHTTPContext(ctx, clone.Header)
+	policy := currentDiagnosticPolicy()
+	captureContent := policy.Enabled && policy.features[DiagnosticFeatureHTTPClient] && policy.HTTPContent && !transport.DisableDiagnosticContent
+	var requestCapture *boundedByteCapture
+	if captureContent && clone.Body != nil {
+		requestCapture = newBoundedByteCapture(policy.MaxContentBytes)
+		clone.Body = &capturingReadCloser{ReadCloser: clone.Body, capture: requestCapture}
+	}
+	dependency := "http"
+	if clone.URL != nil && strings.TrimSpace(clone.URL.Hostname()) != "" {
+		dependency = strings.TrimSpace(clone.URL.Hostname())
+	}
+	var completion sync.Once
+	complete := func(response *http.Response, responseCapture *boundedByteCapture, callErr error) {
+		completion.Do(func() {
+			input := map[string]any{"method": strings.TrimSpace(clone.Method)}
+			if captureContent {
+				for key, value := range diagnosticHTTPInput(clone, requestCapture) {
+					input[key] = value
+				}
+			}
+			output := map[string]any{}
+			outcome := "success"
+			if response != nil {
+				output["status"] = response.StatusCode
+				if captureContent {
+					for key, value := range diagnosticHTTPOutput(response.Header, responseCapture) {
+						output[key] = value
+					}
+				}
+				if response.StatusCode >= http.StatusBadRequest {
+					outcome = "http_error"
+				}
+			}
+			if callErr != nil {
+				outcome = "transport_error"
+			}
+			RecordDependencyCall(ctx, DependencyCall{
+				Feature: DiagnosticFeatureHTTPClient, Dependency: dependency, Operation: operation, Input: input,
+			}, DependencyResult{Outcome: outcome, Output: output, Err: callErr}, time.Since(started))
+		})
+	}
 	response, err := base.RoundTrip(clone)
 	if err != nil {
 		span.SetStatus(codes.Error, "transport_error")
+		complete(response, nil, err)
 		return response, err
 	}
 	if response != nil {
@@ -137,13 +184,75 @@ func (transport HTTPTransport) RoundTrip(request *http.Request) (*http.Response,
 			span.SetStatus(codes.Error, "server_error")
 		}
 	}
+	if response == nil || response.Body == nil {
+		complete(response, nil, nil)
+		return response, nil
+	}
+	var responseCapture *boundedByteCapture
+	if captureContent {
+		responseCapture = newBoundedByteCapture(policy.MaxContentBytes)
+	}
+	response.Body = &diagnosticHTTPResponseBody{
+		ReadCloser: response.Body,
+		capture:    responseCapture,
+		complete: func(readErr error) {
+			complete(response, responseCapture, readErr)
+		},
+	}
 	return response, nil
+}
+
+type diagnosticHTTPResponseBody struct {
+	io.ReadCloser
+	capture  *boundedByteCapture
+	complete func(error)
+	once     sync.Once
+}
+
+func (body *diagnosticHTTPResponseBody) Read(payload []byte) (int, error) {
+	count, err := body.ReadCloser.Read(payload)
+	body.capture.Write(payload[:count])
+	if err != nil {
+		if err == io.EOF {
+			body.finish(nil)
+		} else {
+			body.finish(err)
+		}
+	}
+	return count, err
+}
+
+func (body *diagnosticHTTPResponseBody) Close() error {
+	err := body.ReadCloser.Close()
+	body.finish(err)
+	return err
+}
+
+func (body *diagnosticHTTPResponseBody) finish(err error) {
+	body.once.Do(func() {
+		if body.complete != nil {
+			body.complete(err)
+		}
+	})
 }
 
 // InstrumentHTTPClient returns a shallow client copy whose transport emits
 // and propagates one span per physical attempt. The caller's client is never
 // mutated.
 func InstrumentHTTPClient(source *http.Client, tracerName string) *http.Client {
+	return InstrumentHTTPClientWithOptions(source, tracerName, HTTPClientInstrumentationOptions{})
+}
+
+// HTTPClientInstrumentationOptions can only tighten the process diagnostic
+// policy. It is used by credential and identity adapters whose repository
+// contract forbids response-content logging even when the host enables it.
+type HTTPClientInstrumentationOptions struct {
+	DisableDiagnosticContent bool
+}
+
+// InstrumentHTTPClientWithOptions returns an instrumented shallow copy with a
+// source-owned safety ceiling.
+func InstrumentHTTPClientWithOptions(source *http.Client, tracerName string, options HTTPClientInstrumentationOptions) *http.Client {
 	if source == nil {
 		source = http.DefaultClient
 	}
@@ -151,10 +260,11 @@ func InstrumentHTTPClient(source *http.Client, tracerName string) *http.Client {
 	if existing, ok := clone.Transport.(HTTPTransport); ok {
 		if strings.TrimSpace(existing.TracerName) == "" && strings.TrimSpace(tracerName) != "" {
 			existing.TracerName = tracerName
-			clone.Transport = existing
 		}
+		existing.DisableDiagnosticContent = existing.DisableDiagnosticContent || options.DisableDiagnosticContent
+		clone.Transport = existing
 		return &clone
 	}
-	clone.Transport = HTTPTransport{Base: source.Transport, TracerName: tracerName}
+	clone.Transport = HTTPTransport{Base: source.Transport, TracerName: tracerName, DisableDiagnosticContent: options.DisableDiagnosticContent}
 	return &clone
 }

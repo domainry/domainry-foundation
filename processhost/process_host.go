@@ -27,6 +27,7 @@ type Config struct {
 type Host struct {
 	logger            *zap.Logger
 	shutdownTelemetry telemetry.Shutdown
+	stopDiagnosticLog func()
 	closeOnce         sync.Once
 	closeErr          error
 	started           atomic.Bool
@@ -65,6 +66,17 @@ func Open(ctx context.Context, config Config) (*Host, error) {
 		logging.ReportBootstrapFailure(config.ServiceName, err, logging.Failure{Stage: "logging_initialize"})
 		return nil, err
 	}
+	diagnosticPolicy, err := telemetry.DiagnosticLogPolicyFromEnvironment()
+	if err != nil {
+		logging.ProcessStartFailed(ctx, err, logging.Failure{Stage: "diagnostic_logging_configure"})
+		_ = logging.Sync(logger)
+		return nil, err
+	}
+	if err := telemetry.ConfigureDiagnosticLogging(diagnosticPolicy); err != nil {
+		logging.ProcessStartFailed(ctx, err, logging.Failure{Stage: "diagnostic_logging_configure"})
+		_ = logging.Sync(logger)
+		return nil, err
+	}
 	telemetryConfig := config.Telemetry
 	if strings.TrimSpace(telemetryConfig.ServiceName) == "" && strings.TrimSpace(telemetryConfig.Exporter) == "" && strings.TrimSpace(telemetryConfig.Endpoint) == "" {
 		telemetryConfig, err = telemetry.ConfigFromEnvironment(config.ServiceName, config.ServiceVersion)
@@ -86,7 +98,17 @@ func Open(ctx context.Context, config Config) (*Host, error) {
 		_ = logging.Sync(logger)
 		return nil, err
 	}
-	return &Host{logger: logger, shutdownTelemetry: shutdown}, nil
+	var stopDiagnosticLog func()
+	if policyPath := strings.TrimSpace(os.Getenv("LOG_DIAGNOSTIC_POLICY_FILE")); policyPath != "" {
+		stopDiagnosticLog, err = telemetry.WatchDiagnosticLogPolicyFile(ctx, policyPath, 0)
+		if err != nil {
+			logging.ProcessStartFailed(ctx, err, logging.Failure{Stage: "diagnostic_logging_watch"})
+			_ = shutdown(ctx)
+			_ = logging.Sync(logger)
+			return nil, err
+		}
+	}
+	return &Host{logger: logger, shutdownTelemetry: shutdown, stopDiagnosticLog: stopDiagnosticLog}, nil
 }
 
 func (host *Host) Handler(listenerGroup string, next http.Handler) http.Handler {
@@ -113,6 +135,9 @@ func (host *Host) Close(ctx context.Context, fields map[string]any) error {
 		return nil
 	}
 	host.closeOnce.Do(func() {
+		if host.stopDiagnosticLog != nil {
+			host.stopDiagnosticLog()
+		}
 		if host.shutdownTelemetry != nil {
 			host.closeErr = errors.Join(host.closeErr, host.shutdownTelemetry(ctx))
 		}

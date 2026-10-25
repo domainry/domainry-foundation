@@ -23,7 +23,7 @@ Workflow, or other product-domain behavior.
 - `ratelimit`: storage-neutral decisions and a bounded process-local limiter.
 - `safehttp`: outbound HTTP destination validation with DNS and redirect enforcement.
 - `secrets`: secret providers, key rings, envelope encryption, and redaction.
-- `telemetry`: OpenTelemetry setup, HTTP/async trace propagation, and bounded SQL metrics.
+- `telemetry`: OpenTelemetry setup, HTTP/async trace propagation, bounded SQL metrics, and dynamically controlled boundary diagnostics.
 - `worker`: process lifecycle, durable worker contracts, retry, wakeup, and fair ordering.
 
 Application configuration, product branding, localization catalogs, product-domain
@@ -32,6 +32,20 @@ services rather than this module. Canonical persistence kernels for explicitly s
 tables belong here so their DDL and invariants have one maintenance point. Foundation
 expression contracts deliberately know nothing about Runtime records, authorization,
 or storage.
+
+## Diagnostic boundary logs
+
+`processhost.Open` installs one process-wide diagnostic policy for inbound HTTP,
+outbound HTTP, SQL, and infrastructure adapters. `LOG_DIAGNOSTIC_ENABLED` and
+`LOG_DIAGNOSTIC_FEATURES` select boundaries; `LOG_HTTP_CONTENT`,
+`LOG_SQL_STATEMENT`, and `LOG_CONTENT_MAX_BYTES` control bounded content. Setting
+`LOG_DIAGNOSTIC_POLICY_FILE` to a complete JSON policy enables atomic hot reload
+without rebuilding routers, clients, or database pools.
+
+HTTP content is limited to JSON and passes through recursive secret-key redaction.
+SQL events contain the executed statement text and argument types, never argument
+values. Adapter-specific instrumentation may permanently disable content capture for
+identity or credential boundaries even when the process policy enables it.
 
 ## Development
 

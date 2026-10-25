@@ -50,6 +50,7 @@ type httpStatusRecorder struct {
 	errorKind    string
 	errorCode    string
 	internalErr  error
+	capture      *boundedByteCapture
 }
 
 type httpRouteStateKey struct{}
@@ -76,11 +77,14 @@ func (recorder *httpStatusRecorder) WriteHeader(status int) {
 		if status >= http.StatusInternalServerError {
 			message = http.StatusText(status)
 		}
-		_ = json.NewEncoder(recorder.ResponseWriter).Encode(struct {
+		encoded, _ := json.Marshal(struct {
 			Code      string `json:"code"`
 			Message   string `json:"message"`
 			RequestID string `json:"request_id"`
 		}{Code: code, Message: message, RequestID: strings.TrimSpace(recorder.Header().Get(RequestIDHeader))})
+		encoded = append(encoded, '\n')
+		recorder.capture.Write(encoded)
+		_, _ = recorder.ResponseWriter.Write(encoded)
 		return
 	}
 	recorder.ResponseWriter.WriteHeader(status)
@@ -93,7 +97,9 @@ func (recorder *httpStatusRecorder) Write(payload []byte) (int, error) {
 	if recorder.suppressBody {
 		return len(payload), nil
 	}
-	return recorder.ResponseWriter.Write(payload)
+	count, err := recorder.ResponseWriter.Write(payload)
+	recorder.capture.Write(payload[:count])
+	return count, err
 }
 
 func (recorder *httpStatusRecorder) Unwrap() http.ResponseWriter { return recorder.ResponseWriter }
@@ -205,6 +211,16 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		started := time.Now()
+		policy := currentDiagnosticPolicy()
+		captureContent := policy.Enabled && policy.features[DiagnosticFeatureHTTPServer] && policy.HTTPContent
+		var requestCapture, responseCapture *boundedByteCapture
+		if captureContent {
+			requestCapture = newBoundedByteCapture(policy.MaxContentBytes)
+			responseCapture = newBoundedByteCapture(policy.MaxContentBytes)
+			if request.Body != nil {
+				request.Body = &capturingReadCloser{ReadCloser: request.Body, capture: requestCapture}
+			}
+		}
 		routeState := &httpRouteState{}
 		ctx := context.WithValue(ExtractHTTPContext(request.Context(), request.Header), httpRouteStateKey{}, routeState)
 		ctx = requestcontext.WithWorkspaceID(ctx, strings.TrimSpace(request.Header.Get("X-Workspace-ID")))
@@ -224,7 +240,7 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 		}
 		request = request.WithContext(ctx)
 		writer.Header().Set(RequestIDHeader, requestID)
-		recorder := &httpStatusRecorder{ResponseWriter: writer, status: http.StatusOK}
+		recorder := &httpStatusRecorder{ResponseWriter: writer, status: http.StatusOK, capture: responseCapture}
 
 		func() {
 			defer func() {
@@ -272,6 +288,14 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 		if recorder.status < http.StatusBadRequest && isSuccessfulProbeRoute(route) {
 			return
 		}
+		if !diagnosticFeatureEnabled(DiagnosticFeatureHTTPServer) {
+			return
+		}
+		var diagnosticInput, diagnosticOutput map[string]any
+		if captureContent {
+			diagnosticInput = diagnosticHTTPInput(request, requestCapture)
+			diagnosticOutput = diagnosticHTTPOutput(recorder.Header(), responseCapture)
+		}
 		fields := logging.Fields(map[string]any{
 			"listener_group": listenerGroup,
 			"method":         request.Method,
@@ -280,6 +304,8 @@ func HTTPServerMiddleware(config HTTPServerConfig, next http.Handler) http.Handl
 			"duration_ms":    observation.Duration.Milliseconds(),
 			"error_kind":     recorder.errorKind,
 			"error_code":     recorder.errorCode,
+			"input":          diagnosticInput,
+			"output":         diagnosticOutput,
 		})
 		logger := logging.FromContext(request.Context())
 		if recorder.internalErr != nil {
