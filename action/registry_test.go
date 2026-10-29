@@ -143,6 +143,22 @@ func TestPermissionGrantModeDefaultsToInternal(t *testing.T) {
 	}
 }
 
+func TestPermissionCatalogPresentationDefaultsFromAction(t *testing.T) {
+	action := permissionAction("orders.read", HTTPBinding{Method: "GET", RouteTemplate: "/orders"})
+	normalized, err := NormalizeDefinition(action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	permission := normalized.Permission
+	if permission == nil || permission.ModuleKey != "orders" || permission.GroupKey != "orders" || permission.ScopeKind != PermissionScopeNone || permission.DefaultLocale != "en" {
+		t.Fatalf("permission catalog defaults=%+v", permission)
+	}
+	text := permission.I18n["en"]
+	if text.Label != "Orders · Read" || text.ResourceLabel != "Order management" || text.OperationLabel != "Read" {
+		t.Fatalf("permission catalog text=%+v", text)
+	}
+}
+
 func TestRegistryResolvesNonHTTPAction(t *testing.T) {
 	action := permissionAction("orders.rebuild")
 	action.HTTP = nil

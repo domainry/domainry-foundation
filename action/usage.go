@@ -167,7 +167,7 @@ func (registry *Registry) QueryPermissionUsages(ctx context.Context, request Per
 			for _, permissionKey := range query.PermissionKeys {
 				for _, usage := range registry.usages[permissionIdentity(owner, strings.TrimSpace(permissionKey))] {
 					ownerSnapshot.Usages = append(ownerSnapshot.Usages, PermissionUsage{
-						Permission: usage.Permission,
+						Permission: clonePermissionDefinition(usage.Permission),
 						Action:     cloneDefinition(usage.Action),
 					})
 				}

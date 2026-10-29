@@ -90,7 +90,15 @@ func normalizeDefinition(source ActionDefinition) ActionDefinition {
 		permission := definition.Permission
 		permission.Key = strings.TrimSpace(permission.Key)
 		permission.Owner = strings.TrimSpace(permission.Owner)
+		permission.ModuleKey = strings.TrimSpace(permission.ModuleKey)
+		if permission.ModuleKey == "" {
+			permission.ModuleKey = defaultPermissionModuleKey(permission.Owner)
+		}
+		permission.GroupKey = strings.TrimSpace(permission.GroupKey)
 		permission.ResourceKey = strings.TrimSpace(permission.ResourceKey)
+		if permission.GroupKey == "" {
+			permission.GroupKey = permission.ResourceKey
+		}
 		permission.OperationKey = strings.TrimSpace(permission.OperationKey)
 		permission.Label = strings.TrimSpace(permission.Label)
 		permission.Description = strings.TrimSpace(permission.Description)
@@ -98,6 +106,28 @@ func normalizeDefinition(source ActionDefinition) ActionDefinition {
 		permission.GrantMode = PermissionGrantMode(strings.TrimSpace(string(permission.GrantMode)))
 		if permission.GrantMode == "" {
 			permission.GrantMode = PermissionGrantInternal
+		}
+		permission.ScopeKind = PermissionScopeKind(strings.TrimSpace(string(permission.ScopeKind)))
+		if permission.ScopeKind == "" {
+			permission.ScopeKind = PermissionScopeNone
+		}
+		permission.ObjectKey = strings.TrimSpace(permission.ObjectKey)
+		permission.DefaultLocale = strings.TrimSpace(permission.DefaultLocale)
+		if permission.DefaultLocale == "" {
+			permission.DefaultLocale = "en"
+		}
+		permission.I18n = normalizePermissionLocalizedText(permission.I18n)
+		if len(permission.I18n) == 0 {
+			permission.I18n = PermissionLocalizedText{
+				permission.DefaultLocale: {
+					ModuleLabel:    permission.ModuleKey,
+					GroupLabel:     permission.Category,
+					ResourceLabel:  definition.CapabilityLabel,
+					OperationLabel: definition.OperationLabel,
+					Label:          permission.Label,
+					Description:    permission.Description,
+				},
+			}
 		}
 	}
 	for index := range definition.AssuranceRequired {
@@ -252,6 +282,7 @@ func validateAuthorization(definition ActionDefinition) error {
 
 func validatePermissionDefinition(action ActionDefinition, permission PermissionDefinition) error {
 	if !stableKeyPattern.MatchString(permission.Key) || !stableKeyPattern.MatchString(permission.Owner) ||
+		!stableKeyPattern.MatchString(permission.ModuleKey) || !stableKeyPattern.MatchString(permission.GroupKey) ||
 		!stableKeyPattern.MatchString(permission.ResourceKey) || !stableKeyPattern.MatchString(permission.OperationKey) ||
 		permission.Label == "" || permission.Category == "" {
 		return fmt.Errorf("action %q has an incomplete owned permission", action.Key)
@@ -270,10 +301,59 @@ func validatePermissionDefinition(action ActionDefinition, permission Permission
 	default:
 		return fmt.Errorf("action %q permission %q has unsupported grant mode %q", action.Key, permission.Key, permission.GrantMode)
 	}
+	switch permission.ScopeKind {
+	case PermissionScopeNone:
+		if permission.ObjectKey != "" {
+			return fmt.Errorf("action %q permission %q declares an Object without record scope", action.Key, permission.Key)
+		}
+	case PermissionScopeRecord:
+		if !stableKeyPattern.MatchString(permission.ObjectKey) {
+			return fmt.Errorf("action %q permission %q has invalid record scope Object %q", action.Key, permission.Key, permission.ObjectKey)
+		}
+	default:
+		return fmt.Errorf("action %q permission %q has unsupported scope kind %q", action.Key, permission.Key, permission.ScopeKind)
+	}
+	text, found := permission.I18n[permission.DefaultLocale]
+	if !found || text.ModuleLabel == "" || text.GroupLabel == "" || text.ResourceLabel == "" || text.OperationLabel == "" || text.Label == "" {
+		return fmt.Errorf("action %q permission %q has incomplete default-locale catalog text", action.Key, permission.Key)
+	}
 	if permission.LifecycleStatus != LifecycleActive && permission.LifecycleStatus != LifecycleRetired {
 		return fmt.Errorf("action %q permission %q has unsupported lifecycle status %q", action.Key, permission.Key, permission.LifecycleStatus)
 	}
 	return nil
+}
+
+func defaultPermissionModuleKey(owner string) string {
+	owner = strings.TrimSpace(owner)
+	if prefix, value, found := strings.Cut(owner, ":"); found {
+		switch prefix {
+		case "module", "application":
+			owner = value
+		default:
+			owner = prefix
+		}
+	}
+	owner = strings.ReplaceAll(owner, ":", ".")
+	return owner
+}
+
+func normalizePermissionLocalizedText(source PermissionLocalizedText) PermissionLocalizedText {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(PermissionLocalizedText, len(source))
+	for rawLocale, rawText := range source {
+		locale := strings.TrimSpace(rawLocale)
+		if locale == "" {
+			continue
+		}
+		result[locale] = PermissionText{
+			ModuleLabel: strings.TrimSpace(rawText.ModuleLabel), GroupLabel: strings.TrimSpace(rawText.GroupLabel),
+			ResourceLabel: strings.TrimSpace(rawText.ResourceLabel), OperationLabel: strings.TrimSpace(rawText.OperationLabel),
+			Label: strings.TrimSpace(rawText.Label), Description: strings.TrimSpace(rawText.Description),
+		}
+	}
+	return result
 }
 
 func validRouteTemplate(value string) bool {

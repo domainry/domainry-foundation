@@ -251,7 +251,7 @@ func (registry *Registry) PermissionDefinitions() []PermissionDefinition {
 	}
 	result := make([]PermissionDefinition, 0, len(registry.permissions))
 	for _, permission := range registry.permissions {
-		result = append(result, permission)
+		result = append(result, clonePermissionDefinition(permission))
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].Key != result[j].Key {
@@ -274,7 +274,7 @@ func (registry *Registry) PermissionUsages(owner, permissionKey string) []Permis
 	values := registry.usages[permissionIdentity(owner, permissionKey)]
 	result := make([]PermissionUsage, len(values))
 	for index := range values {
-		result[index] = PermissionUsage{Permission: values[index].Permission, Action: cloneDefinition(values[index].Action)}
+		result[index] = PermissionUsage{Permission: clonePermissionDefinition(values[index].Permission), Action: cloneDefinition(values[index].Action)}
 	}
 	return result
 }
@@ -290,10 +290,21 @@ func cloneDefinition(source ActionDefinition) ActionDefinition {
 	result.Pages = append([]PageBinding(nil), source.Pages...)
 	result.NonHTTP = append([]NonHTTPBinding(nil), source.NonHTTP...)
 	if source.Permission != nil {
-		permission := *source.Permission
+		permission := clonePermissionDefinition(*source.Permission)
 		result.Permission = &permission
 	}
 	result.AssuranceRequired = append([]string(nil), source.AssuranceRequired...)
 	result.ApprovalPolicies = append([]ApprovalPolicy(nil), source.ApprovalPolicies...)
+	return result
+}
+
+func clonePermissionDefinition(source PermissionDefinition) PermissionDefinition {
+	result := source
+	if source.I18n != nil {
+		result.I18n = make(PermissionLocalizedText, len(source.I18n))
+		for locale, text := range source.I18n {
+			result.I18n[locale] = text
+		}
+	}
 	return result
 }

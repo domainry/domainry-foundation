@@ -75,6 +75,30 @@ const (
 	PermissionGrantInternal PermissionGrantMode = "internal"
 )
 
+// PermissionScopeKind tells role authoring clients whether a Permission has a
+// Runtime record boundary. Platform and module management Permissions use
+// none; Object and Object-bound business Actions use record.
+type PermissionScopeKind string
+
+const (
+	PermissionScopeNone   PermissionScopeKind = "none"
+	PermissionScopeRecord PermissionScopeKind = "record"
+)
+
+// PermissionText is the source-owned, user-facing catalog presentation for
+// one locale. Stable grouping keys remain on PermissionDefinition so changing
+// copy never changes authorization identity.
+type PermissionText struct {
+	ModuleLabel    string `json:"module_label"`
+	GroupLabel     string `json:"group_label"`
+	ResourceLabel  string `json:"resource_label"`
+	OperationLabel string `json:"operation_label"`
+	Label          string `json:"label"`
+	Description    string `json:"description,omitempty"`
+}
+
+type PermissionLocalizedText map[string]PermissionText
+
 type HTTPBinding struct {
 	Method               string `json:"method"`
 	RouteTemplate        string `json:"route_template"`
@@ -95,15 +119,21 @@ type NonHTTPBinding struct {
 // current administrative enablement and audit timestamps belong to Identity's
 // current database snapshot, not this code-owned contract.
 type PermissionDefinition struct {
-	Key             string              `json:"key"`
-	Owner           string              `json:"owner"`
-	ResourceKey     string              `json:"resource_key"`
-	OperationKey    string              `json:"operation_key"`
-	Label           string              `json:"label"`
-	Description     string              `json:"description,omitempty"`
-	Category        string              `json:"category"`
-	GrantMode       PermissionGrantMode `json:"grant_mode"`
-	LifecycleStatus LifecycleStatus     `json:"lifecycle_status"`
+	Key             string                  `json:"key"`
+	Owner           string                  `json:"owner"`
+	ModuleKey       string                  `json:"module_key"`
+	GroupKey        string                  `json:"group_key"`
+	ResourceKey     string                  `json:"resource_key"`
+	OperationKey    string                  `json:"operation_key"`
+	Label           string                  `json:"label"`
+	Description     string                  `json:"description,omitempty"`
+	Category        string                  `json:"category"`
+	GrantMode       PermissionGrantMode     `json:"grant_mode"`
+	ScopeKind       PermissionScopeKind     `json:"scope_kind"`
+	ObjectKey       string                  `json:"object_key,omitempty"`
+	DefaultLocale   string                  `json:"default_locale"`
+	I18n            PermissionLocalizedText `json:"i18n"`
+	LifecycleStatus LifecycleStatus         `json:"lifecycle_status"`
 }
 
 // ActionDefinition is the normalized executable authorization boundary. Each
