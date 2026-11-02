@@ -9,6 +9,7 @@ func TestAuthorizationPoliciesHaveExplicitValidShapes(t *testing.T) {
 		strategy   AuthorizationStrategy
 		policy     string
 		audiences  []string
+		signed     []string
 		permission bool
 	}{
 		{name: "anonymous", strategy: AuthorizationAnonymous},
@@ -17,11 +18,12 @@ func TestAuthorizationPoliciesHaveExplicitValidShapes(t *testing.T) {
 		{name: "authenticated self policy", strategy: AuthorizationAuthenticated, policy: "identity.self", permission: true},
 		{name: "signed request", strategy: AuthorizationSigned, policy: "scheduler.trigger"},
 		{name: "signed audience", strategy: AuthorizationSigned, policy: "scheduler.trigger", audiences: []string{"scheduler_service"}},
+		{name: "signed all-data permission", strategy: AuthorizationSigned, policy: "enterprise.knowledge.index_target", audiences: []string{"domainry-runtime"}, signed: []string{"knowledge_runtime.read"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			definition := base
-			definition.Authorization = Authorization{Strategy: test.strategy, PolicyKey: test.policy, Audiences: test.audiences}
+			definition.Authorization = Authorization{Strategy: test.strategy, PolicyKey: test.policy, Audiences: test.audiences, SignedPermissions: test.signed}
 			if !test.permission {
 				definition.Permission = nil
 			}
@@ -55,6 +57,21 @@ func TestAuthorizationPoliciesRejectMixedOrAmbientAuthority(t *testing.T) {
 		}},
 		{name: "signed with permission", mutate: func(value *ActionDefinition) {
 			value.Authorization = Authorization{Strategy: AuthorizationSigned, PolicyKey: "scheduler.trigger"}
+		}},
+		{name: "anonymous with signed permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationAnonymous, SignedPermissions: []string{"orders.read"}}
+			value.Permission = nil
+		}},
+		{name: "authenticated with signed permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationAuthenticated, SignedPermissions: []string{"orders.read"}}
+		}},
+		{name: "signed with malformed permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationSigned, PolicyKey: "scheduler.trigger", SignedPermissions: []string{"orders"}}
+			value.Permission = nil
+		}},
+		{name: "signed with duplicate permission", mutate: func(value *ActionDefinition) {
+			value.Authorization = Authorization{Strategy: AuthorizationSigned, PolicyKey: "scheduler.trigger", SignedPermissions: []string{"orders.read", "orders.read"}}
+			value.Permission = nil
 		}},
 	}
 	for _, test := range tests {

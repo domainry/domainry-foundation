@@ -17,6 +17,8 @@ func TestValidateRouteNamespaceRequiresModuleRoot(t *testing.T) {
 		{owner: "identity", path: "/identity/users"},
 		{owner: "identity", path: "/auth/login"},
 		{owner: "identity", path: "/.well-known/openid-configuration"},
+		{owner: "identity", path: "/scim/v2/ServiceProviderConfig"},
+		{owner: "notification", path: "/scim/v2/Users", wantErr: true},
 		{owner: "data_exchange", path: "/data-exchange/jobs"},
 		{owner: "notification", path: "/notification/inbox"},
 		{owner: "notification", path: "/business/notifications", wantErr: true},

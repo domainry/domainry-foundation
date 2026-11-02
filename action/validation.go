@@ -54,6 +54,10 @@ func normalizeDefinition(source ActionDefinition) ActionDefinition {
 		definition.Authorization.Audiences[index] = strings.TrimSpace(definition.Authorization.Audiences[index])
 	}
 	sort.Strings(definition.Authorization.Audiences)
+	for index := range definition.Authorization.SignedPermissions {
+		definition.Authorization.SignedPermissions[index] = strings.TrimSpace(definition.Authorization.SignedPermissions[index])
+	}
+	sort.Strings(definition.Authorization.SignedPermissions)
 	definition.IdempotencyDecision = strings.TrimSpace(definition.IdempotencyDecision)
 	definition.AuditClass = strings.TrimSpace(definition.AuditClass)
 	definition.AuditEvent = strings.TrimSpace(definition.AuditEvent)
@@ -263,16 +267,25 @@ func validateAuthorization(definition ActionDefinition) error {
 	hasPermission := definition.Permission != nil
 	switch authorization.Strategy {
 	case AuthorizationAnonymous:
-		if hasPermission || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 {
+		if hasPermission || authorization.PolicyKey != "" || len(authorization.Audiences) != 0 || len(authorization.SignedPermissions) != 0 {
 			return fmt.Errorf("anonymous action %q has an invalid authorization declaration", definition.Key)
 		}
 	case AuthorizationAuthenticated:
-		if len(authorization.Audiences) != 0 || authorization.PolicyKey != "" && !hasPermission {
+		if len(authorization.Audiences) != 0 || len(authorization.SignedPermissions) != 0 || authorization.PolicyKey != "" && !hasPermission {
 			return fmt.Errorf("authenticated action %q has an invalid authorization declaration", definition.Key)
 		}
 	case AuthorizationSigned:
 		if hasPermission || !resolverKeyPattern.MatchString(authorization.PolicyKey) || duplicateOrBlank(authorization.Audiences) {
 			return fmt.Errorf("signed action %q has an invalid authorization declaration", definition.Key)
+		}
+		if duplicateOrBlank(authorization.SignedPermissions) {
+			return fmt.Errorf("signed action %q has invalid signed permissions", definition.Key)
+		}
+		for _, permission := range authorization.SignedPermissions {
+			separator := strings.LastIndexByte(permission, '.')
+			if separator <= 0 || separator == len(permission)-1 || !stableKeyPattern.MatchString(permission[:separator]) || !stableKeyPattern.MatchString(permission[separator+1:]) {
+				return fmt.Errorf("signed action %q has invalid signed permission %q", definition.Key, permission)
+			}
 		}
 	default:
 		return fmt.Errorf("action %q has unsupported authorization strategy %q", definition.Key, authorization.Strategy)

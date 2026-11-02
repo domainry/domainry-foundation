@@ -216,7 +216,7 @@ func ValidateRouteNamespace(owner string, route Route) error {
 	if path == root || strings.HasPrefix(path, root+"/") {
 		return nil
 	}
-	if owner == "identity" && (path == "/auth" || strings.HasPrefix(path, "/auth/") || strings.HasPrefix(path, "/.well-known/")) {
+	if owner == "identity" && (path == "/auth" || strings.HasPrefix(path, "/auth/") || path == "/scim" || strings.HasPrefix(path, "/scim/") || strings.HasPrefix(path, "/.well-known/")) {
 		return nil
 	}
 	return fmt.Errorf("route %q must be rooted at %q; listener exposure and product UI do not belong in module paths", route.Pattern(), root)

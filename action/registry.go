@@ -282,6 +282,7 @@ func (registry *Registry) PermissionUsages(owner, permissionKey string) []Permis
 func cloneDefinition(source ActionDefinition) ActionDefinition {
 	result := source
 	result.Authorization.Audiences = append([]string(nil), source.Authorization.Audiences...)
+	result.Authorization.SignedPermissions = append([]string(nil), source.Authorization.SignedPermissions...)
 	result.Exposures = append([]Exposure(nil), source.Exposures...)
 	if source.HTTP != nil {
 		http := *source.HTTP

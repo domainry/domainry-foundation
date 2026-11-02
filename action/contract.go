@@ -14,11 +14,15 @@ const (
 // signature or machine credential. Permission remains the independent
 // same-key function grant checked after authentication. PolicyKey identifies a
 // source-owned signed-request verifier or an authenticated domain policy such
-// as self access; Audiences narrows signed machine callers.
+// as self access; Audiences narrows signed machine callers. SignedPermissions
+// contains exact permissions that the host grants to a verified machine
+// request with an `all` data scope bounded by the token Workspace. They are
+// never accepted for anonymous or browser-authenticated Actions.
 type Authorization struct {
-	Strategy  AuthorizationStrategy `json:"strategy,omitempty"`
-	PolicyKey string                `json:"policy_key,omitempty"`
-	Audiences []string              `json:"audiences,omitempty"`
+	Strategy          AuthorizationStrategy `json:"strategy,omitempty"`
+	PolicyKey         string                `json:"policy_key,omitempty"`
+	Audiences         []string              `json:"audiences,omitempty"`
+	SignedPermissions []string              `json:"signed_permissions,omitempty"`
 }
 
 type Exposure string
