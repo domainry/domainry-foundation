@@ -66,6 +66,16 @@ func TestOperationsKernelOwnsBreakGlassSchema(t *testing.T) {
 	}
 }
 
+func TestOperationsSchemaOmitsRemovedCorrelationColumn(t *testing.T) {
+	migrations, err := SchemaMigrations("sqlite", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if joined := strings.Join(migrations[0].Statements, "\n"); strings.Contains(joined, `"correlation"`) {
+		t.Fatal("Operations migration restored the removed correlation column")
+	}
+}
+
 func TestOperationsMySQLMigrationDoesNotDefaultTextColumns(t *testing.T) {
 	migrations, err := SchemaMigrations("mysql", "")
 	if err != nil {
