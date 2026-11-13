@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/domainry/domainry-foundation/logging"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
 )
 
 const (
@@ -328,6 +331,7 @@ func RecordDependencyCall(ctx context.Context, call DependencyCall, result Depen
 	if !diagnosticFeatureEnabled(call.Feature) {
 		return
 	}
+	caller := dependencyBusinessCaller()
 	outcome := boundedDependencyValue(result.Outcome)
 	if outcome == "" {
 		if result.Err != nil {
@@ -348,10 +352,59 @@ func RecordDependencyCall(ctx context.Context, call DependencyCall, result Depen
 	logger := logging.InfrastructureLogger(ctx)
 	if result.Err != nil {
 		fields = append(fields, zap.String("error_kind", dependencyErrorKind(result.Err)), zap.String("error_code", "dependency.call_failed"))
-		logger.Error("dependency_call", fields...)
+		writeDependencyLog(logger, zapcore.ErrorLevel, caller, fields)
 		return
 	}
-	logger.Info("dependency_call", fields...)
+	writeDependencyLog(logger, zapcore.InfoLevel, caller, fields)
+}
+
+// dependencyBusinessCaller resolves the first source-owned frame above the
+// generic diagnostic boundary. Zap's default caller is RecordDependencyCall,
+// which identifies the logging adapter rather than the repository, use case,
+// or handler that initiated the dependency operation.
+func dependencyBusinessCaller() zapcore.EntryCaller {
+	pcs := make([]uintptr, 64)
+	count := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:count])
+	for {
+		frame, more := frames.Next()
+		if !dependencyInfrastructureFrame(frame) {
+			caller := zapcore.NewEntryCaller(frame.PC, frame.File, frame.Line, frame.PC != 0 && frame.File != "" && frame.Line > 0)
+			caller.Function = frame.Function
+			return caller
+		}
+		if !more {
+			return zapcore.EntryCaller{}
+		}
+	}
+}
+
+func dependencyInfrastructureFrame(frame runtime.Frame) bool {
+	file := filepath.Clean(frame.File)
+	if root := strings.TrimSpace(runtime.GOROOT()); root != "" && strings.HasPrefix(file, filepath.Join(root, "src")+string(filepath.Separator)) {
+		return true
+	}
+	for _, prefix := range []string{
+		"github.com/domainry/domainry-foundation/telemetry.",
+		"github.com/domainry/domainry-orm/",
+		"go.opentelemetry.io/",
+	} {
+		if strings.HasPrefix(frame.Function, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func writeDependencyLog(logger *zap.Logger, level zapcore.Level, caller zapcore.EntryCaller, fields []zap.Field) {
+	checked := logger.Check(level, "dependency_call")
+	if checked == nil {
+		return
+	}
+	if caller.Defined {
+		checked.Entry.Caller = caller
+	}
+	checked.Write(fields...)
 }
 
 func boundedDependencyValue(value string) string {
