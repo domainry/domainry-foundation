@@ -190,9 +190,12 @@ type observedInitializerExecer struct {
 
 func (e observedInitializerExecer) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
 	started := time.Now()
-	result, err := e.ExecerContext.ExecContext(ctx, query, args)
+	execution := startSQLExecutionTrace(ctx, e.role, query)
+	result, err := e.ExecerContext.ExecContext(execution.ctx, query, args)
+	output := sqlExecOutput(result)
 	e.metrics.ObserveQuery(e.role, sqlOperation(query), time.Since(started), err)
-	recordSQLExecution(ctx, e.role, query, namedSQLDiagnosticArguments(args), sqlExecOutput(result), started, err)
+	recordSQLExecution(execution.ctx, e.role, query, namedSQLDiagnosticArguments(args), output, started, err)
+	execution.finish(err, output)
 	return result, err
 }
 
@@ -221,9 +224,12 @@ func (c *observedConn) execContext(ctx context.Context, query string, args []dri
 		return nil, driver.ErrSkip
 	}
 	started := time.Now()
-	result, err := execer.ExecContext(ctx, query, args)
+	execution := startSQLExecutionTrace(ctx, c.role, query)
+	result, err := execer.ExecContext(execution.ctx, query, args)
+	output := sqlExecOutput(result)
 	c.metrics.ObserveQuery(c.role, sqlOperation(query), time.Since(started), err)
-	recordSQLExecution(ctx, c.role, query, namedSQLDiagnosticArguments(args), sqlExecOutput(result), started, err)
+	recordSQLExecution(execution.ctx, c.role, query, namedSQLDiagnosticArguments(args), output, started, err)
+	execution.finish(err, output)
 	return result, err
 }
 
@@ -249,13 +255,15 @@ func (c *observedConn) queryContext(ctx context.Context, query string, args []dr
 		return nil, driver.ErrSkip
 	}
 	started := time.Now()
-	rows, err := queryer.QueryContext(ctx, query, args)
+	execution := startSQLExecutionTrace(ctx, c.role, query)
+	rows, err := queryer.QueryContext(execution.ctx, query, args)
 	c.metrics.ObserveQuery(c.role, sqlOperation(query), time.Since(started), err)
 	if err != nil {
-		recordSQLExecution(ctx, c.role, query, namedSQLDiagnosticArguments(args), nil, started, err)
+		recordSQLExecution(execution.ctx, c.role, query, namedSQLDiagnosticArguments(args), nil, started, err)
+		execution.finish(err, nil)
 		return rows, err
 	}
-	return newObservedSQLRows(rows, ctx, c.role, query, namedSQLDiagnosticArguments(args), started), nil
+	return newObservedSQLRows(rows, execution, c.role, query, namedSQLDiagnosticArguments(args), started), nil
 }
 
 func (c *observedConn) Ping(ctx context.Context) error {
@@ -307,9 +315,12 @@ func (s observedStmt) Exec(args []driver.Value) (driver.Result, error) {
 
 func (s observedStmt) exec(args []driver.Value) (driver.Result, error) {
 	started := time.Now()
+	execution := startSQLExecutionTrace(context.Background(), s.role, s.statement)
 	result, err := s.Stmt.Exec(args)
+	output := sqlExecOutput(result)
 	s.metrics.ObserveQuery(s.role, s.operation, time.Since(started), err)
-	recordSQLExecution(context.Background(), s.role, s.statement, positionalSQLDiagnosticArguments(args), sqlExecOutput(result), started, err)
+	recordSQLExecution(execution.ctx, s.role, s.statement, positionalSQLDiagnosticArguments(args), output, started, err)
+	execution.finish(err, output)
 	return result, err
 }
 
@@ -322,13 +333,15 @@ func (s observedStmt) Query(args []driver.Value) (driver.Rows, error) {
 
 func (s observedStmt) query(args []driver.Value) (driver.Rows, error) {
 	started := time.Now()
+	execution := startSQLExecutionTrace(context.Background(), s.role, s.statement)
 	rows, err := s.Stmt.Query(args)
 	s.metrics.ObserveQuery(s.role, s.operation, time.Since(started), err)
 	if err != nil {
-		recordSQLExecution(context.Background(), s.role, s.statement, positionalSQLDiagnosticArguments(args), nil, started, err)
+		recordSQLExecution(execution.ctx, s.role, s.statement, positionalSQLDiagnosticArguments(args), nil, started, err)
+		execution.finish(err, nil)
 		return rows, err
 	}
-	return newObservedSQLRows(rows, context.Background(), s.role, s.statement, positionalSQLDiagnosticArguments(args), started), nil
+	return newObservedSQLRows(rows, execution, s.role, s.statement, positionalSQLDiagnosticArguments(args), started), nil
 }
 
 func (s observedStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) {
@@ -355,9 +368,12 @@ func (s observedStmt) ExecContext(ctx context.Context, args []driver.NamedValue)
 
 func (s observedStmt) execContext(ctx context.Context, contextual driver.StmtExecContext, args []driver.NamedValue) (driver.Result, error) {
 	started := time.Now()
-	result, err := contextual.ExecContext(ctx, args)
+	execution := startSQLExecutionTrace(ctx, s.role, s.statement)
+	result, err := contextual.ExecContext(execution.ctx, args)
+	output := sqlExecOutput(result)
 	s.metrics.ObserveQuery(s.role, s.operation, time.Since(started), err)
-	recordSQLExecution(ctx, s.role, s.statement, namedSQLDiagnosticArguments(args), sqlExecOutput(result), started, err)
+	recordSQLExecution(execution.ctx, s.role, s.statement, namedSQLDiagnosticArguments(args), output, started, err)
+	execution.finish(err, output)
 	return result, err
 }
 
@@ -382,13 +398,15 @@ func (s observedStmt) QueryContext(ctx context.Context, args []driver.NamedValue
 
 func (s observedStmt) queryContext(ctx context.Context, contextual driver.StmtQueryContext, args []driver.NamedValue) (driver.Rows, error) {
 	started := time.Now()
-	rows, err := contextual.QueryContext(ctx, args)
+	execution := startSQLExecutionTrace(ctx, s.role, s.statement)
+	rows, err := contextual.QueryContext(execution.ctx, args)
 	s.metrics.ObserveQuery(s.role, s.operation, time.Since(started), err)
 	if err != nil {
-		recordSQLExecution(ctx, s.role, s.statement, namedSQLDiagnosticArguments(args), nil, started, err)
+		recordSQLExecution(execution.ctx, s.role, s.statement, namedSQLDiagnosticArguments(args), nil, started, err)
+		execution.finish(err, nil)
 		return rows, err
 	}
-	return newObservedSQLRows(rows, ctx, s.role, s.statement, namedSQLDiagnosticArguments(args), started), nil
+	return newObservedSQLRows(rows, execution, s.role, s.statement, namedSQLDiagnosticArguments(args), started), nil
 }
 
 type observedTx struct {
@@ -427,7 +445,7 @@ func (t *observedTx) Rollback() error {
 
 type observedSQLRows struct {
 	driver.Rows
-	ctx       context.Context
+	execution sqlExecutionTrace
 	role      string
 	query     string
 	arguments []sqlDiagnosticArgument
@@ -436,12 +454,13 @@ type observedSQLRows struct {
 	finished  atomic.Bool
 }
 
-func newObservedSQLRows(rows driver.Rows, ctx context.Context, role, query string, arguments []sqlDiagnosticArgument, started time.Time) driver.Rows {
+func newObservedSQLRows(rows driver.Rows, execution sqlExecutionTrace, role, query string, arguments []sqlDiagnosticArgument, started time.Time) driver.Rows {
 	if rows == nil {
+		execution.finish(nil, nil)
 		return nil
 	}
 	return &observedSQLRows{
-		Rows: rows, ctx: ctx, role: role, query: query,
+		Rows: rows, execution: execution, role: role, query: query,
 		arguments: append([]sqlDiagnosticArgument(nil), arguments...), started: started,
 	}
 }
@@ -528,9 +547,11 @@ func (rows *observedSQLRows) finish(err error, complete bool) {
 		err = nil
 	}
 	columns := append([]string(nil), rows.Rows.Columns()...)
-	recordSQLExecution(rows.ctx, rows.role, rows.query, rows.arguments, map[string]any{
+	output := map[string]any{
 		"columns": columns, "row_count": rows.rowCount, "complete": complete,
-	}, rows.started, err)
+	}
+	recordSQLExecution(rows.execution.ctx, rows.role, rows.query, rows.arguments, output, rows.started, err)
+	rows.execution.finish(err, output)
 }
 
 func recordSQLExecution(ctx context.Context, role, query string, arguments []sqlDiagnosticArgument, output map[string]any, started time.Time, err error) {
@@ -538,6 +559,12 @@ func recordSQLExecution(ctx context.Context, role, query string, arguments []sql
 	input := map[string]any{
 		"argument_count": len(argumentTypes),
 		"argument_types": append([]string(nil), argumentTypes...),
+	}
+	template := sanitizeSQLTraceTemplate(query)
+	operation := sqlOperation(template)
+	if template != "" {
+		input["statement_template"] = template
+		input["statement_fingerprint"] = sqlTraceFingerprint(template)
 	}
 	policy := currentDiagnosticPolicy()
 	statement := strings.TrimSpace(renderExecutableSQL(query, arguments))
@@ -552,7 +579,7 @@ func recordSQLExecution(ctx context.Context, role, query string, arguments []sql
 		}
 	}
 	RecordDependencyCall(ctx, DependencyCall{
-		Feature: DiagnosticFeatureSQL, Dependency: "database." + boundedSQLRole(role), Operation: sqlOperation(query), Input: input,
+		Feature: DiagnosticFeatureSQL, Dependency: "database." + boundedSQLRole(role), Operation: operation, Input: input,
 	}, DependencyResult{Output: output, Err: err}, time.Since(started))
 }
 

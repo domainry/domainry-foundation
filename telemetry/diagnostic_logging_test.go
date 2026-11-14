@@ -214,8 +214,8 @@ func TestObservedSQLLogsExecutableStatementAndResult(t *testing.T) {
 	if !strings.Contains(diagnostic, executable) || !strings.Contains(diagnostic, "rows_affected") {
 		t.Fatalf("SQL statement/result missing: %s", diagnostic)
 	}
-	if strings.Contains(diagnostic, query) {
-		t.Fatalf("SQL template was logged instead of executable SQL: %s", diagnostic)
+	if !strings.Contains(diagnostic, `"statement_template":"UPDATE accounts SET display_name = ? WHERE id = ?"`) || !strings.Contains(diagnostic, `"statement_fingerprint":"`) {
+		t.Fatalf("safe SQL identity missing: %s", diagnostic)
 	}
 }
 
