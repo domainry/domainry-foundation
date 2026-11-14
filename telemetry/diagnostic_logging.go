@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -395,7 +396,52 @@ func dependencyInfrastructureFrame(frame runtime.Frame) bool {
 			return true
 		}
 	}
-	return false
+	return dependencyStandardLibraryFunction(frame.Function)
+}
+
+var dependencyBuildModules struct {
+	once  sync.Once
+	paths []string
+}
+
+func dependencyStandardLibraryFunction(function string) bool {
+	function = strings.TrimSpace(function)
+	if function == "" || strings.HasPrefix(function, "main.") {
+		return false
+	}
+	for _, modulePath := range dependencyLinkedModulePaths() {
+		if function == modulePath || strings.HasPrefix(function, modulePath+"/") || strings.HasPrefix(function, modulePath+".") {
+			return false
+		}
+	}
+	head := function
+	if slash := strings.IndexByte(head, '/'); slash >= 0 {
+		head = head[:slash]
+	} else if dot := strings.IndexByte(head, '.'); dot >= 0 {
+		head = head[:dot]
+	}
+	return head != "" && !strings.Contains(head, ".")
+}
+
+func dependencyLinkedModulePaths() []string {
+	dependencyBuildModules.once.Do(func() {
+		buildInfo, ok := debug.ReadBuildInfo()
+		if !ok {
+			return
+		}
+		if path := strings.TrimSpace(buildInfo.Main.Path); path != "" {
+			dependencyBuildModules.paths = append(dependencyBuildModules.paths, path)
+		}
+		for _, dependency := range buildInfo.Deps {
+			if dependency == nil {
+				continue
+			}
+			if path := strings.TrimSpace(dependency.Path); path != "" {
+				dependencyBuildModules.paths = append(dependencyBuildModules.paths, path)
+			}
+		}
+	})
+	return dependencyBuildModules.paths
 }
 
 func writeDependencyLog(logger *zap.Logger, level zapcore.Level, caller zapcore.EntryCaller, fields []zap.Field) {
