@@ -385,6 +385,8 @@ func dependencyInfrastructureFrame(frame runtime.Frame) bool {
 		return true
 	}
 	for _, prefix := range []string{
+		"database/sql.",
+		"database/sql/driver.",
 		"github.com/domainry/domainry-foundation/telemetry.",
 		"github.com/domainry/domainry-orm/",
 		"go.opentelemetry.io/",
