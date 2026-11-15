@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/domainry/domainry-foundation/logging"
+	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
@@ -38,6 +40,8 @@ const (
 
 	defaultDiagnosticContentBytes = 16 << 10
 	maxDiagnosticContentBytes     = 64 << 10
+	defaultDependencySlowMS       = 250
+	defaultDependencySuccessRate  = 1.0
 )
 
 var diagnosticFeatures = []string{
@@ -57,11 +61,13 @@ var diagnosticFeatures = []string{
 // events. Content switches never override the hard redaction rules enforced by
 // the individual observers.
 type DiagnosticLogPolicy struct {
-	Enabled         bool     `json:"enabled"`
-	Features        []string `json:"features"`
-	HTTPContent     bool     `json:"http_content"`
-	SQLStatement    bool     `json:"sql_statement"`
-	MaxContentBytes int      `json:"max_content_bytes"`
+	Enabled                     bool     `json:"enabled"`
+	Features                    []string `json:"features"`
+	HTTPContent                 bool     `json:"http_content"`
+	SQLStatement                bool     `json:"sql_statement"`
+	MaxContentBytes             int      `json:"max_content_bytes"`
+	DependencySuccessSampleRate float64  `json:"dependency_success_sample_rate"`
+	DependencySlowMilliseconds  int64    `json:"dependency_slow_ms"`
 }
 
 type diagnosticPolicySnapshot struct {
@@ -82,11 +88,13 @@ func init() {
 // product explicitly enables its bounded, redacted capture.
 func DefaultDiagnosticLogPolicy() DiagnosticLogPolicy {
 	return DiagnosticLogPolicy{
-		Enabled:         true,
-		Features:        append([]string(nil), diagnosticFeatures...),
-		HTTPContent:     false,
-		SQLStatement:    true,
-		MaxContentBytes: defaultDiagnosticContentBytes,
+		Enabled:                     true,
+		Features:                    append([]string(nil), diagnosticFeatures...),
+		HTTPContent:                 false,
+		SQLStatement:                true,
+		MaxContentBytes:             defaultDiagnosticContentBytes,
+		DependencySuccessSampleRate: defaultDependencySuccessRate,
+		DependencySlowMilliseconds:  defaultDependencySlowMS,
 	}
 }
 
@@ -129,6 +137,22 @@ func DiagnosticLogPolicyFromEnvironment() (DiagnosticLogPolicy, error) {
 			joined = errors.Join(joined, fmt.Errorf("invalid LOG_CONTENT_MAX_BYTES %q: must be an integer", raw))
 		} else {
 			policy.MaxContentBytes = value
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("LOG_DEPENDENCY_SUCCESS_SAMPLE_RATE")); raw != "" {
+		value, err := strconv.ParseFloat(raw, 64)
+		if err != nil || value <= 0 || value > 1 {
+			joined = errors.Join(joined, fmt.Errorf("invalid LOG_DEPENDENCY_SUCCESS_SAMPLE_RATE %q: must be greater than 0 and at most 1", raw))
+		} else {
+			policy.DependencySuccessSampleRate = value
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("LOG_DEPENDENCY_SLOW_MS")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			joined = errors.Join(joined, fmt.Errorf("invalid LOG_DEPENDENCY_SLOW_MS %q: must be a positive integer", raw))
+		} else {
+			policy.DependencySlowMilliseconds = value
 		}
 	}
 	if joined != nil {
@@ -184,6 +208,18 @@ func diagnosticPolicySnapshotFor(policy DiagnosticLogPolicy) (*diagnosticPolicyS
 	}
 	if policy.MaxContentBytes < 1 || policy.MaxContentBytes > maxDiagnosticContentBytes {
 		return nil, fmt.Errorf("LOG_CONTENT_MAX_BYTES must be between 1 and %d", maxDiagnosticContentBytes)
+	}
+	if policy.DependencySuccessSampleRate == 0 {
+		policy.DependencySuccessSampleRate = defaultDependencySuccessRate
+	}
+	if policy.DependencySuccessSampleRate <= 0 || policy.DependencySuccessSampleRate > 1 {
+		return nil, errors.New("LOG_DEPENDENCY_SUCCESS_SAMPLE_RATE must be greater than 0 and at most 1")
+	}
+	if policy.DependencySlowMilliseconds == 0 {
+		policy.DependencySlowMilliseconds = defaultDependencySlowMS
+	}
+	if policy.DependencySlowMilliseconds < 1 {
+		return nil, errors.New("LOG_DEPENDENCY_SLOW_MS must be a positive integer")
 	}
 	allowed := make(map[string]bool, len(diagnosticFeatures))
 	for _, feature := range diagnosticFeatures {
@@ -289,7 +325,9 @@ func WatchDiagnosticLogPolicyFile(parent context.Context, path string, interval 
 				logging.FromContext(ctx).Info("diagnostic_log_policy_changed", logging.Fields(map[string]any{
 					"enabled": next.Enabled, "features": next.Features, "http_content": next.HTTPContent,
 					"sql_statement": next.SQLStatement, "max_content_bytes": next.MaxContentBytes,
-					"policy_digest": digest,
+					"dependency_success_sample_rate": next.DependencySuccessSampleRate,
+					"dependency_slow_ms":             next.DependencySlowMilliseconds,
+					"policy_digest":                  digest,
 				})...)
 			}
 		}
@@ -332,7 +370,6 @@ func RecordDependencyCall(ctx context.Context, call DependencyCall, result Depen
 	if !diagnosticFeatureEnabled(call.Feature) {
 		return
 	}
-	caller := dependencyBusinessCaller()
 	outcome := boundedDependencyValue(result.Outcome)
 	if outcome == "" {
 		if result.Err != nil {
@@ -341,6 +378,10 @@ func RecordDependencyCall(ctx context.Context, call DependencyCall, result Depen
 			outcome = "success"
 		}
 	}
+	if result.Err == nil && outcome == "success" && !recordSuccessfulDependency(ctx, call, duration) {
+		return
+	}
+	caller := dependencyBusinessCaller()
 	fields := logging.Fields(map[string]any{
 		"dependency_kind": boundedDependencyValue(call.Feature),
 		"dependency":      boundedDependencyValue(call.Dependency),
@@ -357,6 +398,33 @@ func RecordDependencyCall(ctx context.Context, call DependencyCall, result Depen
 		return
 	}
 	writeDependencyLog(logger, zapcore.InfoLevel, caller, fields)
+}
+
+var dependencySuccessCounter atomic.Uint64
+
+// recordSuccessfulDependency keeps every slow call and deterministically
+// samples fast successes by trace. Metrics remain unsampled; this function
+// only bounds verbose per-execution diagnostic logs. A trace-level decision
+// keeps the dependency evidence internally coherent instead of retaining a
+// random subset of SQL spans from the same request.
+func recordSuccessfulDependency(ctx context.Context, call DependencyCall, duration time.Duration) bool {
+	policy := currentDiagnosticPolicy()
+	if duration >= time.Duration(policy.DependencySlowMilliseconds)*time.Millisecond {
+		return true
+	}
+	if policy.DependencySuccessSampleRate >= 1 {
+		return true
+	}
+	identity := requestcontext.RequestID(ctx)
+	if identity == "" {
+		identity = strconv.FormatUint(dependencySuccessCounter.Add(1), 10)
+	}
+	digest := sha256.Sum256([]byte(identity + "\x00" + boundedDependencyValue(call.Dependency) + "\x00" + boundedDependencyValue(call.Operation)))
+	// Use the high 53 bits so conversion to float64 is exact. The decision is
+	// stable for a trace/dependency/operation tuple and contains no identifier
+	// in emitted telemetry.
+	sample := float64(binary.BigEndian.Uint64(digest[:8])>>11) / float64(uint64(1)<<53)
+	return sample < policy.DependencySuccessSampleRate
 }
 
 // dependencyBusinessCaller resolves the first source-owned frame above the

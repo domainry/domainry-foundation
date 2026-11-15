@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/domainry/domainry-foundation/logging"
+	"github.com/domainry/domainry-foundation/requestcontext"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest/observer"
@@ -150,6 +152,50 @@ func TestHTTPClientAdapterCanPermanentlyDisableDiagnosticContent(t *testing.T) {
 	diagnostic := toJSON(entries[0].ContextMap())
 	if strings.Contains(diagnostic, "must-not-appear") || !strings.Contains(diagnostic, "identity.lookup") || !strings.Contains(diagnostic, "200") {
 		t.Fatalf("unexpected metadata-only diagnostic event: %s", diagnostic)
+	}
+}
+
+func TestDependencySamplingDropsOnlyFastSuccessfulDiagnostics(t *testing.T) {
+	restoreDiagnosticPolicy(t)
+	if err := ConfigureDiagnosticLogging(DiagnosticLogPolicy{
+		Enabled: true, Features: []string{DiagnosticFeatureSQL}, MaxContentBytes: 1024,
+		DependencySuccessSampleRate: 0.01, DependencySlowMilliseconds: 250,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	core, observed := observer.New(zapcore.InfoLevel)
+	previousLogger := zap.L()
+	zap.ReplaceGlobals(zap.New(core))
+	t.Cleanup(func() { zap.ReplaceGlobals(previousLogger) })
+	ctx := requestcontext.WithRequestID(t.Context(), "00000000000000000000000000000001")
+	call := DependencyCall{Feature: DiagnosticFeatureSQL, Dependency: "database.runtime", Operation: "select"}
+
+	RecordDependencyCall(ctx, call, DependencyResult{}, 5*time.Millisecond)
+	RecordDependencyCall(ctx, call, DependencyResult{}, 250*time.Millisecond)
+	RecordDependencyCall(ctx, call, DependencyResult{Err: errors.New("database unavailable")}, 5*time.Millisecond)
+
+	entries := observed.FilterMessage("dependency_call").All()
+	if len(entries) != 2 {
+		t.Fatalf("dependency events=%#v, want slow success and error only", entries)
+	}
+	if entries[0].ContextMap()["outcome"] != "success" || entries[0].ContextMap()["duration_ms"] != int64(250) {
+		t.Fatalf("slow dependency event=%#v", entries[0].ContextMap())
+	}
+	if entries[1].Level != zapcore.ErrorLevel || entries[1].ContextMap()["outcome"] != "error" {
+		t.Fatalf("failed dependency event=%#v", entries[1])
+	}
+}
+
+func TestDependencySamplingPolicyRejectsUnsafeBounds(t *testing.T) {
+	base := DefaultDiagnosticLogPolicy()
+	base.DependencySuccessSampleRate = 1.01
+	if err := ConfigureDiagnosticLogging(base); err == nil || !strings.Contains(err.Error(), "LOG_DEPENDENCY_SUCCESS_SAMPLE_RATE") {
+		t.Fatalf("invalid sample rate error=%v", err)
+	}
+	base = DefaultDiagnosticLogPolicy()
+	base.DependencySlowMilliseconds = -1
+	if err := ConfigureDiagnosticLogging(base); err == nil || !strings.Contains(err.Error(), "LOG_DEPENDENCY_SLOW_MS") {
+		t.Fatalf("invalid slow threshold error=%v", err)
 	}
 }
 
