@@ -37,6 +37,7 @@ type Config struct {
 	Exporter       string
 	Endpoint       string
 	Headers        map[string]string
+	Authorization  string
 	Insecure       bool
 	SampleRatio    float64
 	ExportTimeout  time.Duration
@@ -61,6 +62,14 @@ func ConfigFromEnvironment(serviceName, serviceVersion string) (Config, error) {
 		ServiceName: strings.TrimSpace(serviceName), ServiceVersion: strings.TrimSpace(serviceVersion), Exporter: exporter,
 		Endpoint: firstEnvironmentValue("TELEMETRY_ENDPOINT", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "OTEL_EXPORTER_OTLP_ENDPOINT"), Headers: parseEnvironmentHeaders(firstEnvironmentValue("TELEMETRY_HEADERS", "OTEL_EXPORTER_OTLP_HEADERS")),
 		Insecure: environmentBool("TELEMETRY_INSECURE", "OTEL_EXPORTER_OTLP_INSECURE"), SampleRatio: 1, ExportTimeout: 10 * time.Second,
+	}
+	if strings.EqualFold(exporter, ExporterOTLPHTTP) || strings.EqualFold(exporter, "otlp") {
+		if authorization, configured := os.LookupEnv("TELEMETRY_AUTHORIZATION"); configured {
+			if !otlpAuthorizationPattern.MatchString(authorization) {
+				return Config{}, errInvalidOTLPAuthorization
+			}
+			config.Authorization = authorization
+		}
 	}
 	if raw := firstEnvironmentValue("TELEMETRY_SAMPLE_RATIO", "OTEL_TRACES_SAMPLER_ARG"); raw != "" {
 		ratio, err := strconv.ParseFloat(raw, 64)
@@ -139,6 +148,13 @@ func Initialize(ctx context.Context, cfg Config) (Shutdown, error) {
 	}
 	if len(cfg.Headers) > 0 {
 		opts = append(opts, otlptracehttp.WithHeaders(cloneHeaders(cfg.Headers)))
+	}
+	if cfg.Authorization != "" || hasOTLPAuthorization(cfg.Headers) {
+		client, err := authenticatedOTLPHTTPClient(cfg)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, otlptracehttp.WithHTTPClient(client))
 	}
 	if cfg.ExportTimeout > 0 {
 		opts = append(opts, otlptracehttp.WithTimeout(cfg.ExportTimeout))
