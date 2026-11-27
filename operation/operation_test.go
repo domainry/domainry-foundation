@@ -66,13 +66,13 @@ func TestOperationsKernelOwnsBreakGlassSchema(t *testing.T) {
 	}
 }
 
-func TestOperationsSchemaOmitsRemovedCorrelationColumn(t *testing.T) {
+func TestOperationsSchemaPreservesPublishedCorrelationColumn(t *testing.T) {
 	migrations, err := SchemaMigrations("sqlite", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if joined := strings.Join(migrations[0].Statements, "\n"); strings.Contains(joined, `"correlation"`) {
-		t.Fatal("Operations migration restored the removed correlation column")
+	if joined := strings.Join(migrations[0].Statements, "\n"); !strings.Contains(joined, `"correlation"`) {
+		t.Fatal("Operations migration changed the published version 1 schema")
 	}
 }
 
